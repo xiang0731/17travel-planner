@@ -1,0 +1,361 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>旅游规划助手</title>
+    <link rel="stylesheet" href="styles.css">
+    <!-- Google地图API -->
+    <!-- Google Maps API脚本将根据设置中的API密钥动态加载 -->
+    <!-- 请在应用设置中配置您的Google Maps API密钥 -->
+</head>
+
+<body>
+    <div class="container">
+        <header>
+            <div class="header-left">
+                <h1>🗺️ 旅游规划助手</h1>
+                <p>探索世界，规划你的完美旅程</p>
+            </div>
+            <div class="header-right">
+                <button id="saveSchemeBtn" class="header-btn" title="方案管理">📋 方案</button>
+                <button id="importBtn" class="header-btn" title="导入备份">📥 导入</button>
+                <button id="exportBtn" class="header-btn" title="导出功能">📤 导出</button>
+                <button id="settingsBtn" class="header-btn" title="设置">⚙️ 设置</button>
+            </div>
+        </header>
+
+        <div class="main-content">
+            <!-- 左侧面板 -->
+            <div class="sidebar">
+                <!-- 搜索区域 -->
+                <div class="search-section">
+                    <h3>🔍 搜索地点</h3>
+                    <div class="search-box">
+                        <input type="text" id="searchInput" placeholder="输入地点名称..." />
+                        <button id="searchBtn">搜索</button>
+                    </div>
+                    <div id="searchResults" class="search-results"></div>
+                </div>
+
+                <!-- 游玩列表 -->
+                <div class="playlist-section">
+                    <h3>📝 我的游玩列表</h3>
+                    <div class="playlist-controls">
+                        <button id="clearAllBtn" class="clear-btn">清空列表</button>
+                        <button id="optimizeRouteBtn" class="optimize-btn">优化路线</button>
+                        <button id="showRouteBtn" class="show-route-btn">显示路线</button>
+                    </div>
+                    <ul id="travelList" class="travel-list"></ul>
+
+                    <!-- 总距离显示 -->
+                    <div class="distance-summary">
+                        <h4>📊 路线统计</h4>
+                        <div id="totalDistance" class="total-distance">总距离: 0 公里</div>
+                        <div id="estimatedTime" class="estimated-time">预计时间: 0 小时</div>
+                    </div>
+
+                    <!-- 待定列表 -->
+                    <div class="pending-section">
+                        <h3>⏳ 待定列表</h3>
+                        <ul id="pendingList" class="pending-list"></ul>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 右侧地图 -->
+            <div class="map-container">
+                <div id="mapContainer" class="map"></div>
+
+                <!-- 地图控制按钮 -->
+                <div class="map-controls">
+                    <button id="locateBtn" class="control-btn">📍 当前位置</button>
+                    <button id="clearMarkersBtn" class="control-btn">🗑️ 清除标记</button>
+                    <button id="satelliteBtn" class="control-btn">🛰️ 卫星图</button>
+                    <button id="toggleNamesBtn" class="control-btn">🏷️ 隐藏名称</button>
+                </div>
+
+
+            </div>
+        </div>
+
+
+    </div>
+
+    <!-- 模态框 -->
+    <div id="placeModal" class="modal">
+        <div class="modal-content">
+            <span class="close">&times;</span>
+            <h3 id="modalTitle">地点详情</h3>
+            <div id="modalContent">
+                <p id="placeName"></p>
+                <p id="placeAddress"></p>
+                <button id="addToListBtn" class="add-btn">添加到游玩列表</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 储存方案模态框 -->
+    <div id="saveSchemeModal" class="modal">
+        <div class="modal-content">
+            <span class="close">&times;</span>
+            <h3>📋 方案管理</h3>
+            <div class="save-scheme-content">
+                <div class="save-new-scheme">
+                    <h4>保存新方案</h4>
+                    <input type="text" id="schemeNameInput" placeholder="输入方案名称..." maxlength="50">
+                    <button id="saveNewSchemeBtn" class="save-btn">保存方案</button>
+                </div>
+                <div class="saved-schemes">
+                    <h4>已保存的方案</h4>
+                    <div id="savedSchemesList" class="schemes-list"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 导入模态框 -->
+    <div id="importModal" class="modal">
+        <div class="modal-content">
+            <span class="close">&times;</span>
+            <h3>📥 导入数据</h3>
+            <div class="import-content">
+                <div class="import-area">
+                    <div class="file-drop-zone" id="fileDropZone">
+                        <div class="drop-icon">📁</div>
+                        <h4>选择备份文件</h4>
+                        <p>拖拽JSON备份文件到此处，或点击选择文件</p>
+                        <input type="file" id="fileInput" accept=".json" style="display: none;">
+                        <button id="selectFileBtn" class="import-btn">选择文件</button>
+                    </div>
+                </div>
+                <div class="import-info">
+                    <h4>📋 说明</h4>
+                    <ul>
+                        <li>仅支持本应用导出的JSON备份文件</li>
+                        <li>导入将替换当前所有游玩地点</li>
+                        <li>建议导入前先保存当前方案</li>
+                    </ul>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 导出选择模态框 -->
+    <div id="exportModal" class="modal">
+        <div class="modal-content">
+            <span class="close">&times;</span>
+            <h3>📤 导出选择</h3>
+            <div class="export-options">
+                <div class="export-option">
+                    <div class="export-card" id="exportShareCard">
+                        <div class="export-icon">🌐</div>
+                        <h4>观看分享版</h4>
+                        <p>生成包含高清地图截图的HTML文件，自动识别当前显示状态，适合分享给朋友或离线查看</p>
+                        <button class="export-btn share-export">导出分享版</button>
+                    </div>
+                </div>
+                <div class="export-option">
+                    <div class="export-card" id="exportBackupCard">
+                        <div class="export-icon">💾</div>
+                        <h4>数据备份版</h4>
+                        <p>导出JSON格式的完整数据，可用于备份和恢复旅游计划</p>
+                        <button class="export-btn backup-export">导出备份版</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 设置模态框 -->
+    <div id="settingsModal" class="modal">
+        <div class="modal-content settings-modal-content">
+            <span class="close">&times;</span>
+            <h3>⚙️ 应用设置</h3>
+            <div class="settings-container">
+                <!-- 左侧菜单 -->
+                <div class="settings-sidebar">
+                    <div class="settings-menu">
+                        <div class="settings-menu-item active" data-panel="api">
+                            <div class="menu-icon">🔑</div>
+                            <span class="menu-text">API配置</span>
+                        </div>
+                        <div class="settings-menu-item" data-panel="navigation">
+                            <div class="menu-icon">🧭</div>
+                            <span class="menu-text">导航设置</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 右侧内容面板 -->
+                <div class="settings-content">
+                    <!-- API设置面板 -->
+                    <div class="settings-panel active" id="apiPanel">
+                        <div class="panel-header">
+                            <h4>🔑 API密钥配置</h4>
+                            <p class="panel-description">配置地图服务的API密钥以启用完整功能</p>
+                        </div>
+                        <div class="panel-content">
+                            <div class="api-keys-config">
+                                <div class="api-key-group">
+                                    <label for="googleApiKeyInput">Google Maps API密钥</label>
+                                    <input type="password" id="googleApiKeyInput" placeholder="输入Google Maps API Key..."
+                                        maxlength="200">
+                                    <small class="api-hint">
+                                        用于地图显示、地点搜索、路线规划等功能
+                                        <br>
+                                        获取方式：访问 <a href="https://console.cloud.google.com/" target="_blank">Google Cloud
+                                            Console</a> 创建API密钥
+                                    </small>
+                                </div>
+                                <div class="api-key-group">
+                                    <label for="gaodeApiKeyInput">高德地图API密钥</label>
+                                    <input type="password" id="gaodeApiKeyInput" placeholder="输入高德地图API Key..."
+                                        maxlength="200">
+                                    <small class="api-hint">
+                                        用于中国大陆地区的地图服务和导航功能
+                                        <br>
+                                        获取方式：访问 <a href="https://console.amap.com/" target="_blank">高德开放平台</a> 申请API密钥
+                                    </small>
+                                </div>
+                                <div class="api-key-group">
+                                    <label for="bingApiKeyInput">Bing Maps API密钥</label>
+                                    <input type="password" id="bingApiKeyInput" placeholder="输入Bing Maps API Key..."
+                                        maxlength="200">
+                                    <small class="api-hint">
+                                        用于微软Bing地图服务（可选）
+                                        <br>
+                                        获取方式：访问 <a href="https://www.bingmapsportal.com/" target="_blank">Bing Maps Dev
+                                            Center</a> 申请密钥
+                                    </small>
+                                </div>
+                                <div class="api-security-note">
+                                    <div class="security-icon">🔒</div>
+                                    <div class="security-text">
+                                        <strong>安全说明：</strong>API密钥仅存储在您的浏览器本地，不会上传到任何服务器。请妥善保管您的API密钥，避免在公共场所输入。
+                                    </div>
+                                </div>
+                            </div>
+
+
+                        </div>
+                    </div>
+
+                    <!-- 导航设置面板 -->
+                    <div class="settings-panel" id="navigationPanel">
+                        <div class="panel-header">
+                            <h4>🧭 导航应用设置</h4>
+                            <p class="panel-description">选择点击"导航"按钮时使用的地图应用</p>
+                        </div>
+                        <div class="panel-content">
+                            <div class="setting-options">
+                                <label class="setting-option">
+                                    <input type="radio" name="navigationApp" value="amap" checked>
+                                    <div class="option-card">
+                                        <div class="option-icon">🗺️</div>
+                                        <div class="option-info">
+                                            <h5>高德地图</h5>
+                                            <p>国内使用体验佳，导航精准</p>
+                                        </div>
+                                    </div>
+                                </label>
+                                <label class="setting-option">
+                                    <input type="radio" name="navigationApp" value="google">
+                                    <div class="option-card">
+                                        <div class="option-icon">🌍</div>
+                                        <div class="option-info">
+                                            <h5>Google 地图</h5>
+                                            <p>全球覆盖，海外旅行首选</p>
+                                        </div>
+                                    </div>
+                                </label>
+                                <label class="setting-option">
+                                    <input type="radio" name="navigationApp" value="bing">
+                                    <div class="option-card">
+                                        <div class="option-icon">🌐</div>
+                                        <div class="option-info">
+                                            <h5>Bing 地图</h5>
+                                            <p>微软地图服务，界面简洁</p>
+                                        </div>
+                                    </div>
+                                </label>
+                            </div>
+
+                            <div class="additional-settings">
+                                <h5>🎯 导航偏好设置</h5>
+                                <div class="preference-group">
+                                    <label class="preference-item">
+                                        <input type="checkbox" id="openInNewTab">
+                                        <span class="checkmark"></span>
+                                        <span class="preference-text">在新标签页中打开导航</span>
+                                    </label>
+                                    <label class="preference-item">
+                                        <input type="checkbox" id="showNavigationHint">
+                                        <span class="checkmark"></span>
+                                        <span class="preference-text">显示导航操作提示</span>
+                                    </label>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 保存和取消按钮 -->
+            <div class="settings-actions">
+                <button id="saveSettingsBtn" class="settings-save-btn">保存设置</button>
+                <button id="cancelSettingsBtn" class="settings-cancel-btn">取消</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 编辑游玩点模态框 -->
+    <div id="editPlaceModal" class="modal">
+        <div class="modal-content">
+            <span class="close">&times;</span>
+            <h3>✏️ 编辑游玩点</h3>
+            <div class="edit-place-content">
+                <div class="edit-section">
+                    <div class="original-info">
+                        <h4>📍 原始信息</h4>
+                        <div class="info-row">
+                            <span class="info-label">名称：</span>
+                            <span id="editOriginalName" class="info-value"></span>
+                        </div>
+                        <div class="info-row">
+                            <span class="info-label">地址：</span>
+                            <span id="editOriginalAddress" class="info-value"></span>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="edit-section">
+                    <div class="custom-info">
+                        <h4>✏️ 自定义信息</h4>
+                        <div class="form-group">
+                            <label for="customNameInput">自定义名称（可选）</label>
+                            <input type="text" id="customNameInput" placeholder="输入自定义名称..." maxlength="100">
+                            <small class="form-hint">留空将使用原始名称</small>
+                        </div>
+                        <div class="form-group">
+                            <label for="notesInput">备注信息（可选）</label>
+                            <textarea id="notesInput" placeholder="添加备注信息，如营业时间、门票价格、游玩建议等..." maxlength="500"
+                                rows="4"></textarea>
+                            <small class="form-hint">最多500字</small>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="edit-actions">
+                    <button id="saveEditBtn" class="save-edit-btn">💾 保存修改</button>
+                    <button id="cancelEditBtn" class="cancel-edit-btn">取消</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="script.js"></script>
+</body>
+
+</html>
