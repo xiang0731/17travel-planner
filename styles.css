@@ -5,13 +5,19 @@
     box-sizing: border-box;
 }
 
+html {
+    height: 100%;
+    overflow: hidden;
+}
+
 body {
     font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
     background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-    min-height: 100vh;
+    height: 100vh;
     color: #333;
     margin: 0;
     padding: 0;
+    overflow: hidden;
 }
 
 .container {
@@ -36,6 +42,7 @@ header {
     display: flex;
     justify-content: space-between;
     align-items: center;
+    box-sizing: border-box;
 }
 
 .header-left {
@@ -83,10 +90,11 @@ header p {
 .main-content {
     display: flex;
     gap: 20px;
-    height: calc(100vh - 140px);
+    flex: 1;
     min-height: 0;
-    padding: 15px 20px 15px 20px;
+    padding: 15px 20px;
     overflow: hidden;
+    box-sizing: border-box;
 }
 
 /* 侧边栏样式 */
@@ -1774,6 +1782,10 @@ header p {
     .map-container {
         width: 65%;
     }
+
+    .main-content {
+        flex: 1;
+    }
 }
 
 @media (max-width: 1024px) {
@@ -1792,6 +1804,7 @@ header p {
     .main-content {
         padding: 15px;
         gap: 15px;
+        flex: 1;
     }
 
     .route-card-header {
@@ -1811,14 +1824,16 @@ header p {
         flex-direction: column;
         padding: 10px;
         gap: 10px;
-        overflow: visible;
+        overflow: hidden;
+        flex: 1;
+        box-sizing: border-box;
     }
 
     .sidebar {
         width: 100%;
         min-width: 100%;
         max-width: none;
-        height: 45vh;
+        flex: 0 0 45vh;
         padding: 16px;
         border-radius: 8px;
         gap: 12px;
@@ -1826,7 +1841,8 @@ header p {
 
     .map-container {
         width: 100%;
-        height: 55vh;
+        flex: 1;
+        min-height: 200px;
         border-radius: 8px;
     }
 
@@ -2540,9 +2556,10 @@ header p {
     padding: 15px 20px;
     flex-shrink: 0;
     box-shadow: 0 -2px 10px rgba(0, 0, 0, 0.05);
-    height: 70px;
     display: flex;
     align-items: center;
+    min-height: 70px;
+    box-sizing: border-box;
 }
 
 .footer-content {
@@ -2593,7 +2610,7 @@ header p {
 /* 移动端页脚样式 */
 @media (max-width: 768px) {
     .page-footer {
-        height: auto;
+        min-height: auto;
         padding: 10px 15px;
     }
 
@@ -2617,9 +2634,5 @@ header p {
     .footer-link {
         padding: 8px 15px;
         font-size: 12px;
-    }
-
-    .main-content {
-        height: calc(100vh - 160px);
     }
 }
