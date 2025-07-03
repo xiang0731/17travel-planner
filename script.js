@@ -2894,7 +2894,6 @@ class TravelPlanner {
                     </div>
                     <div class="scheme-actions">
                         <button class="${loadButtonClass}" onclick="app.loadScheme(${scheme.id})" ${isCurrentScheme ? 'disabled' : ''}>${loadButtonText}</button>
-                        <button class="scheme-btn overwrite-scheme-btn" onclick="app.overwriteScheme(${scheme.id})">覆盖</button>
                         <button class="scheme-btn delete-scheme-btn" onclick="app.deleteScheme(${scheme.id})">删除</button>
                     </div>
                 </div>
@@ -3025,46 +3024,7 @@ class TravelPlanner {
         this.loadSavedSchemes();
     }
 
-    // 覆盖方案
-    overwriteScheme(schemeId) {
-        const schemes = this.getSavedSchemes();
-        const scheme = schemes.find(s => s.id === schemeId);
 
-        if (!scheme) {
-            this.showToast('方案不存在');
-            return;
-        }
-
-        // 检查当前是否有游玩列表
-        if (this.travelList.length === 0) {
-            this.showToast('当前没有游玩地点，无法覆盖方案');
-            return;
-        }
-
-        if (!confirm(`确定用当前的游玩列表覆盖方案"${scheme.name}"吗？\n\n当前列表：${this.travelList.length}个地点\n原方案：${scheme.placesCount}个地点\n\n此操作不可恢复。`)) {
-            return;
-        }
-
-        // 更新方案数据
-        scheme.travelList = [...this.travelList];
-        scheme.routeSegments = Array.from(this.routeSegments.entries());
-        scheme.settings = { ...this.settings };
-        scheme.placesCount = this.travelList.length;
-        scheme.modifiedAt = new Date().toISOString();
-        scheme.version = '2.0'; // 更新版本号
-
-        // 保存更新后的方案列表
-        localStorage.setItem('travelSchemes', JSON.stringify(schemes));
-
-        // 如果覆盖的是当前方案，保持当前方案状态
-        if (this.currentSchemeId === schemeId) {
-            this.currentSchemeName = scheme.name;
-            this.saveData(); // 保存更新后的状态
-        }
-
-        this.showToast(`方案"${scheme.name}"已覆盖`);
-        this.loadSavedSchemes();
-    }
 
     // 导出分享版本
     async exportShareVersion() {
