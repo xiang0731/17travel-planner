@@ -1109,8 +1109,8 @@ class TravelPlanner {
         this.currentEditPlace.customName = customName || null;
         this.currentEditPlace.notes = notes || null;
 
-        // 更新显示
-        this.updateTravelList();
+        // 更新显示（不重新计算距离）
+        this.updateTravelListWithoutRecalculation();
         this.recreateMarkers(); // 重新创建标记以更新名称
         this.saveData();
         this.markAsModified(); // 标记为已修改
