@@ -32,6 +32,10 @@ class TravelPlanner {
         this.showPlaceNames = true; // 默认显示名称
         this.placeLabels = []; // 存储自定义标签覆盖层
 
+        // 待定点显示控制
+        this.showPendingPlaces = false; // 默认不显示待定点
+        this.pendingMarkers = []; // 存储待定点标记
+
         // 应用设置 - 默认设置
         this.settings = {
             navigationApp: 'amap', // 默认使用高德地图
@@ -399,6 +403,7 @@ class TravelPlanner {
         document.getElementById('clearMarkersBtn').addEventListener('click', () => this.toggleMarkers());
         document.getElementById('satelliteBtn').addEventListener('click', () => this.toggleSatellite());
         document.getElementById('toggleNamesBtn').addEventListener('click', () => this.togglePlaceNames());
+        document.getElementById('togglePendingBtn').addEventListener('click', () => this.togglePendingPlaces());
 
         // 创建城市过滤按钮
         this.createCityFilterButton();
@@ -1154,6 +1159,12 @@ class TravelPlanner {
         this.updateTravelList();
         this.calculateDistances();
         this.drawRoute();
+
+        // 如果当前显示待定点，需要重新创建待定点标记
+        if (this.showPendingPlaces) {
+            this.createPendingMarkers();
+        }
+
         this.saveData();
         this.markAsModified(); // 标记为已修改
     }
@@ -1173,7 +1184,7 @@ class TravelPlanner {
             return;
         }
 
-        this.travelList.push({
+        const newPlace = {
             id: Date.now(),
             name: this.currentPlace.name,
             address: this.currentPlace.address,
@@ -1182,10 +1193,11 @@ class TravelPlanner {
             customName: null, // 自定义名称
             notes: null, // 备注信息
             isPending: false // 是否为待定状态
-        });
+        };
+
+        this.travelList.push(newPlace);
 
         this.updateTravelList();
-        this.addMarker(this.currentPlace);
         this.calculateDistances();
         this.drawRoute(); // 添加地点后重新绘制路线
         this.closeModal();
@@ -1718,6 +1730,11 @@ class TravelPlanner {
     addMarker(place) {
         if (!this.isMapLoaded) return;
 
+        // 如果是待定点，不创建普通标记
+        if (place.isPending) {
+            return;
+        }
+
         // 获取游玩点在激活列表中的索引（用于显示编号）
         const activePlaces = this.travelList.filter(p => !p.isPending);
         const index = activePlaces.findIndex(p => p.id === place.id);
@@ -1802,6 +1819,9 @@ class TravelPlanner {
         });
         this.placeLabels = [];
 
+        // 清除待定点标记
+        this.clearPendingMarkers();
+
         if (this.directionsRenderer) {
             this.directionsRenderer.setDirections({ routes: [] });
         }
@@ -1858,6 +1878,9 @@ class TravelPlanner {
         });
         this.placeLabels = [];
 
+        // 清除待定点标记
+        this.clearPendingMarkers();
+
         // 清除路线
         if (this.directionsRenderer) {
             this.directionsRenderer.setDirections({ routes: [] });
@@ -1876,8 +1899,14 @@ class TravelPlanner {
     restoreMarkers() {
         if (!this.isMapLoaded || this.savedMarkers.length === 0) return;
 
-        // 重新创建标记
-        this.savedMarkers.forEach(place => this.addMarker(place));
+        // 重新创建标记（只恢复非待定点）
+        const activePlaces = this.savedMarkers.filter(place => !place.isPending);
+        activePlaces.forEach(place => this.addMarker(place));
+
+        // 如果当前显示待定点，重新创建待定点标记
+        if (this.showPendingPlaces) {
+            this.createPendingMarkers();
+        }
 
         // 重新绘制路线
         if (this.travelList.length >= 2) {
@@ -2308,19 +2337,25 @@ class TravelPlanner {
         this.showPlaceNames = !this.showPlaceNames;
         const toggleBtn = document.getElementById('toggleNamesBtn');
 
-        if (PlaceLabel && this.placeLabels.length > 0) {
+        if (PlaceLabel && (this.placeLabels.length > 0 || this.pendingMarkers.length > 0)) {
             if (this.showPlaceNames) {
-                // 显示所有地点名称
+                // 显示所有地点名称（包括游玩点和待定点）
                 this.placeLabels.forEach(l => {
                     if (l.label) l.label.show();
+                });
+                this.pendingMarkers.forEach(m => {
+                    if (m.label) m.label.show();
                 });
                 toggleBtn.textContent = '🏷️ 隐藏名称';
                 toggleBtn.title = '隐藏地点名称';
                 this.showToast('已显示地点名称');
             } else {
-                // 隐藏所有地点名称
+                // 隐藏所有地点名称（包括游玩点和待定点）
                 this.placeLabels.forEach(l => {
                     if (l.label) l.label.hide();
+                });
+                this.pendingMarkers.forEach(m => {
+                    if (m.label) m.label.hide();
                 });
                 toggleBtn.textContent = '🏷️ 显示名称';
                 toggleBtn.title = '显示地点名称';
@@ -2331,6 +2366,125 @@ class TravelPlanner {
             this.showToast('标签功能需要Google Maps API支持');
             toggleBtn.textContent = this.showPlaceNames ? '🏷️ 隐藏名称' : '🏷️ 显示名称';
         }
+    }
+
+    // 切换显示/隐藏待定点
+    togglePendingPlaces() {
+        if (!this.isMapLoaded) return;
+
+        this.showPendingPlaces = !this.showPendingPlaces;
+        const toggleBtn = document.getElementById('togglePendingBtn');
+
+        if (this.showPendingPlaces) {
+            // 显示待定点
+            this.createPendingMarkers();
+            toggleBtn.textContent = '⏳ 隐藏待定点';
+            toggleBtn.title = '隐藏待定游玩点';
+            const pendingCount = this.travelList.filter(place => place.isPending).length;
+            this.showToast(`已显示 ${pendingCount} 个待定点`);
+        } else {
+            // 隐藏待定点
+            this.clearPendingMarkers();
+            toggleBtn.textContent = '⏳ 显示待定点';
+            toggleBtn.title = '显示待定游玩点';
+            // 强制应用城市过滤以确保所有待定点都被隐藏（但不调整地图视角）
+            this.applyCityFilterWithoutFitting();
+            this.showToast('已隐藏待定点');
+        }
+    }
+
+    // 创建待定点标记
+    createPendingMarkers() {
+        // 清除现有的待定点标记
+        this.clearPendingMarkers();
+
+        const pendingPlaces = this.travelList.filter(place => place.isPending);
+        pendingPlaces.forEach(place => {
+            this.addPendingMarker(place);
+        });
+
+        // 应用当前的城市过滤（但不调整地图视角）
+        this.applyCityFilterWithoutFitting();
+    }
+
+    // 清除待定点标记
+    clearPendingMarkers() {
+        this.pendingMarkers.forEach(markerData => {
+            if (markerData.marker) {
+                markerData.marker.setMap(null);
+            }
+            if (markerData.label) {
+                markerData.label.setMap(null);
+            }
+        });
+        this.pendingMarkers = [];
+    }
+
+    // 添加待定点标记
+    addPendingMarker(place) {
+        if (!this.isMapLoaded) return;
+
+        // 使用自定义名称（如果有的话）
+        const displayName = place.customName || place.name;
+
+        const marker = new google.maps.Marker({
+            position: { lat: place.lat, lng: place.lng },
+            map: this.map,
+            title: `⏳ ${displayName}`,
+            icon: {
+                url: 'data:image/svg+xml;charset=UTF-8,' + encodeURIComponent(`
+                    <svg width="40" height="50" viewBox="0 0 40 50" fill="none" xmlns="http://www.w3.org/2000/svg">
+                        <!-- 外层阴影 -->
+                        <ellipse cx="20" cy="47" rx="8" ry="3" fill="rgba(0,0,0,0.3)"/>
+                        <!-- 主要标记 -->
+                        <path d="M20 3C13.4 3 8 8.4 8 15C8 24.75 20 47 20 47C20 47 32 24.75 32 15C32 8.4 26.6 3 20 3Z" fill="#f39c12" stroke="#ffffff" stroke-width="2"/>
+                        <!-- 内圆 -->
+                        <circle cx="20" cy="15" r="6" fill="#ffffff"/>
+                        <!-- 待定图标 -->
+                        <text x="20" y="19" text-anchor="middle" font-family="Arial" font-size="12" font-weight="bold" fill="#f39c12">⏳</text>
+                    </svg>
+                `),
+                scaledSize: new google.maps.Size(40, 50),
+                anchor: new google.maps.Point(20, 50)
+            },
+            zIndex: 500 // 确保待定点在游玩点之下
+        });
+
+        // 创建自定义标签显示地点名称（仅在Google Maps API可用时）
+        let placeLabel = null;
+        if (PlaceLabel) {
+            placeLabel = new PlaceLabel(
+                { lat: place.lat, lng: place.lng },
+                displayName,
+                this.map
+            );
+
+            // 根据当前名称显示状态决定是否显示
+            if (!this.showPlaceNames) {
+                placeLabel.hide();
+            }
+        }
+
+        // 添加点击事件
+        marker.addListener('click', () => {
+            this.showPlaceModal({
+                name: place.name,
+                address: place.address,
+                lng: place.lng,
+                lat: place.lat,
+                customName: place.customName,
+                notes: place.notes,
+                isPending: true
+            });
+        });
+
+        // 存储标记信息
+        this.pendingMarkers.push({
+            id: place.id,
+            marker: marker,
+            label: placeLabel,
+            place: place
+        });
     }
 
     // 创建城市过滤按钮
@@ -2509,8 +2663,13 @@ class TravelPlanner {
     applyyCityFilter() {
         if (!this.isMapLoaded) return;
 
-        // 隐藏所有标记
+        // 隐藏所有标记（游玩点）
         this.markers.forEach(markerObj => {
+            markerObj.marker.setVisible(false);
+        });
+
+        // 隐藏所有待定点标记
+        this.pendingMarkers.forEach(markerObj => {
             markerObj.marker.setVisible(false);
         });
 
@@ -2518,13 +2677,19 @@ class TravelPlanner {
         let visiblePlaces = [];
 
         if (this.currentCityFilter === 'all') {
-            // 显示所有标记
+            // 显示所有游玩点标记
             this.markers.forEach(markerObj => {
                 markerObj.marker.setVisible(true);
             });
+            // 显示所有待定点标记（如果当前显示待定点）
+            if (this.showPendingPlaces) {
+                this.pendingMarkers.forEach(markerObj => {
+                    markerObj.marker.setVisible(true);
+                });
+            }
             visiblePlaces = this.travelList;
         } else {
-            // 只显示指定城市的标记
+            // 只显示指定城市的游玩点标记
             this.markers.forEach(markerObj => {
                 const city = this.extractCityFromAddress(markerObj.place.address);
                 if (city === this.currentCityFilter) {
@@ -2532,6 +2697,18 @@ class TravelPlanner {
                     visiblePlaces.push(markerObj.place);
                 }
             });
+            // 只显示指定城市的待定点标记（如果当前显示待定点）
+            if (this.showPendingPlaces) {
+                this.pendingMarkers.forEach(markerObj => {
+                    const city = this.extractCityFromAddress(markerObj.place.address);
+                    if (city === this.currentCityFilter) {
+                        markerObj.marker.setVisible(true);
+                        if (!visiblePlaces.find(p => p.id === markerObj.place.id)) {
+                            visiblePlaces.push(markerObj.place);
+                        }
+                    }
+                });
+            }
         }
 
         // 调整地图视野以适应可见的地点
@@ -2540,6 +2717,62 @@ class TravelPlanner {
         }
 
         console.log(`城市过滤已应用: ${this.currentCityFilter}, 显示 ${visiblePlaces.length} 个地点`);
+    }
+
+    // 应用城市过滤但不调整地图视角（用于显示待定点时）
+    applyCityFilterWithoutFitting() {
+        if (!this.isMapLoaded) return;
+
+        // 隐藏所有标记（游玩点）
+        this.markers.forEach(markerObj => {
+            markerObj.marker.setVisible(false);
+        });
+
+        // 隐藏所有待定点标记
+        this.pendingMarkers.forEach(markerObj => {
+            markerObj.marker.setVisible(false);
+        });
+
+        // 根据过滤条件显示标记
+        let visiblePlaces = [];
+
+        if (this.currentCityFilter === 'all') {
+            // 显示所有游玩点标记
+            this.markers.forEach(markerObj => {
+                markerObj.marker.setVisible(true);
+            });
+            // 显示所有待定点标记（如果当前显示待定点）
+            if (this.showPendingPlaces) {
+                this.pendingMarkers.forEach(markerObj => {
+                    markerObj.marker.setVisible(true);
+                });
+            }
+            visiblePlaces = this.travelList;
+        } else {
+            // 只显示指定城市的游玩点标记
+            this.markers.forEach(markerObj => {
+                const city = this.extractCityFromAddress(markerObj.place.address);
+                if (city === this.currentCityFilter) {
+                    markerObj.marker.setVisible(true);
+                    visiblePlaces.push(markerObj.place);
+                }
+            });
+            // 只显示指定城市的待定点标记（如果当前显示待定点）
+            if (this.showPendingPlaces) {
+                this.pendingMarkers.forEach(markerObj => {
+                    const city = this.extractCityFromAddress(markerObj.place.address);
+                    if (city === this.currentCityFilter) {
+                        markerObj.marker.setVisible(true);
+                        if (!visiblePlaces.find(p => p.id === markerObj.place.id)) {
+                            visiblePlaces.push(markerObj.place);
+                        }
+                    }
+                });
+            }
+        }
+
+        // 注意：这里不调用 fitMapToPlaces，保持当前地图视角
+        console.log(`城市过滤已应用（不调整视角）: ${this.currentCityFilter}, 显示 ${visiblePlaces.length} 个地点`);
     }
 
     // 更新城市过滤按钮状态
@@ -2600,6 +2833,11 @@ class TravelPlanner {
         activePlaces.forEach(place => {
             this.addMarker(place);
         });
+
+        // 如果当前显示待定点，重新创建待定点标记
+        if (this.showPendingPlaces) {
+            this.createPendingMarkers();
+        }
 
         // 应用当前的城市过滤
         this.applyyCityFilter();
@@ -2749,6 +2987,14 @@ class TravelPlanner {
                 this.travelList.forEach(place => this.addMarker(place));
                 if (this.travelList.length >= 2) {
                     this.drawRoute();
+                }
+
+                // 重置待定点显示状态
+                this.showPendingPlaces = false;
+                const toggleBtn = document.getElementById('togglePendingBtn');
+                if (toggleBtn) {
+                    toggleBtn.textContent = '⏳ 显示待定点';
+                    toggleBtn.title = '显示待定游玩点';
                 }
 
                 // 确保城市过滤按钮状态正确
@@ -3021,6 +3267,14 @@ class TravelPlanner {
         this.clearMarkers();
         this.travelList.forEach(place => this.addMarker(place));
         this.drawRoute();
+
+        // 重置待定点显示状态
+        this.showPendingPlaces = false;
+        const toggleBtn = document.getElementById('togglePendingBtn');
+        if (toggleBtn) {
+            toggleBtn.textContent = '⏳ 显示待定点';
+            toggleBtn.title = '显示待定游玩点';
+        }
 
         // 适配地图视野
         if (this.travelList.length > 0) {
@@ -3580,6 +3834,14 @@ class TravelPlanner {
             // 重新创建标记和路线
             this.travelList.forEach(place => this.addMarker(place));
             this.drawRoute();
+
+            // 重置待定点显示状态
+            this.showPendingPlaces = false;
+            const toggleBtn = document.getElementById('togglePendingBtn');
+            if (toggleBtn) {
+                toggleBtn.textContent = '⏳ 显示待定点';
+                toggleBtn.title = '显示待定游玩点';
+            }
 
             // 保存数据
             this.saveData();
