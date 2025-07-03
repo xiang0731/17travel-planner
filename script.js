@@ -3096,8 +3096,8 @@ class TravelPlanner {
             this.createPendingMarkers();
         }
 
-        // 应用当前的城市过滤
-        this.applyyCityFilter();
+        // 应用当前的城市过滤（不调整地图视角）
+        this.applyCityFilterWithoutFitting();
     }
 
     // 调整地图视野以适应指定的地点
