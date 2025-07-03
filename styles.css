@@ -2093,6 +2093,26 @@ header p {
     background: rgba(102, 126, 234, 0.6);
 }
 
+/* 冲突列表滚动条样式 */
+.conflict-list::-webkit-scrollbar {
+    width: 8px;
+}
+
+.conflict-list::-webkit-scrollbar-track {
+    background: rgba(0, 0, 0, 0.05);
+    border-radius: 4px;
+}
+
+.conflict-list::-webkit-scrollbar-thumb {
+    background: linear-gradient(135deg, #667eea, #764ba2);
+    border-radius: 4px;
+    transition: background 0.3s ease;
+}
+
+.conflict-list::-webkit-scrollbar-thumb:hover {
+    background: linear-gradient(135deg, #5a6fd8, #6a4190);
+}
+
 /* 地图截图专用样式 - 移除可能影响截图的CSS属性 */
 .map-container.screenshot-mode {
     overflow: visible !important;
@@ -2674,16 +2694,24 @@ header p {
 
 /* 冲突解决模态框样式 */
 .large-modal {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    margin: 0;
     max-width: 1000px;
-    width: 95vw;
-    max-height: 90vh;
+    width: 90vw;
+    max-height: 85vh;
+    display: flex;
+    flex-direction: column;
 }
 
 .conflict-resolution-content {
     display: flex;
     flex-direction: column;
     gap: 20px;
-    max-height: calc(90vh - 120px);
+    flex: 1;
+    min-height: 0;
 }
 
 .conflict-header {
@@ -2692,6 +2720,7 @@ header p {
     border-radius: 8px;
     padding: 15px;
     color: #8a6d3b;
+    flex-shrink: 0;
 }
 
 .conflict-header p {
@@ -2705,7 +2734,9 @@ header p {
     display: flex;
     flex-direction: column;
     gap: 20px;
-    padding: 10px 0;
+    padding: 10px 5px;
+    max-height: calc(80vh - 200px);
+    min-height: 0;
 }
 
 .conflict-item {
@@ -2909,6 +2940,7 @@ header p {
     justify-content: flex-end;
     padding-top: 15px;
     border-top: 1px solid #e9ecef;
+    flex-shrink: 0;
 }
 
 .primary-btn {
@@ -2949,8 +2981,13 @@ header p {
 /* 冲突解决模态框响应式设计 */
 @media (max-width: 768px) {
     .large-modal {
-        width: 98vw;
-        max-height: 95vh;
+        width: 95vw;
+        max-height: 90vh;
+    }
+
+    .conflict-list {
+        max-height: calc(75vh - 200px);
+        padding: 8px 2px;
     }
 
     .scheme-comparison {
