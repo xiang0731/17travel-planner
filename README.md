@@ -2,7 +2,7 @@
 
 一个功能强大的在线旅游规划工具，基于Google Maps API，支持智能路线规划、多平台导航集成和完整的行程管理功能。
 
-![旅游规划助手](https://img.shields.io/badge/版本-v2.0-blue) ![Google Maps](https://img.shields.io/badge/Google%20Maps-API-green) ![响应式](https://img.shields.io/badge/响应式-✓-success)
+![17旅游规划助手](https://img.shields.io/badge/版本-v2.0-blue) ![Google Maps](https://img.shields.io/badge/Google%20Maps-API-green) ![响应式](https://img.shields.io/badge/响应式-✓-success)
 
 ## ✨ 核心特性
 

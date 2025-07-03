@@ -54,8 +54,51 @@ class TravelPlanner {
         this.currentSchemeId = null;
         this.currentSchemeName = null;
 
+        // 导入冲突处理状态
+        this.pendingImportData = null;
+        this.conflictResolutions = new Map(); // 存储冲突解决方案
+
+        // ID生成计数器，确保唯一性
+        this.idCounter = 0;
+
         // 首先加载已保存的设置，然后再初始化应用
         this.initializeApp();
+    }
+
+    // 生成基于名称和时间的UUID
+    generateSchemeUUID(schemeName, createdAt) {
+        // 清理方案名称，移除特殊字符，保留中英文和数字
+        const cleanName = schemeName.replace(/[^a-zA-Z0-9\u4e00-\u9fff]/g, '');
+        // 格式化时间为 YYYYMMDD_HHMMSS
+        const date = new Date(createdAt);
+        const year = date.getFullYear();
+        const month = String(date.getMonth() + 1).padStart(2, '0');
+        const day = String(date.getDate()).padStart(2, '0');
+        const hours = String(date.getHours()).padStart(2, '0');
+        const minutes = String(date.getMinutes()).padStart(2, '0');
+        const seconds = String(date.getSeconds()).padStart(2, '0');
+        const timeStr = `${year}${month}${day}_${hours}${minutes}${seconds}`;
+        // 组合成UUID：名称_时间
+        return `${cleanName}_${timeStr}`;
+    }
+
+    // 为了向后兼容，保留原始UUID生成方法（用于现有数据升级）
+    generateRandomUUID() {
+        return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function (c) {
+            const r = Math.random() * 16 | 0;
+            const v = c === 'x' ? r : (r & 0x3 | 0x8);
+            return v.toString(16);
+        });
+    }
+
+    // 生成唯一的方案ID
+    generateUniqueSchemeId() {
+        // 使用当前时间戳 + 随机数 + 计数器确保唯一性
+        const timestamp = Date.now();
+        const random = Math.floor(Math.random() * 1000000);
+        const counter = (this.idCounter || 0) + 1;
+        this.idCounter = counter;
+        return timestamp * 1000 + random + counter;
     }
 
     // 初始化应用程序
@@ -326,14 +369,20 @@ class TravelPlanner {
 
         // 导入模态框
         document.querySelector('#importModal .close').addEventListener('click', () => this.closeImportModal());
-        document.getElementById('selectFileBtn').addEventListener('click', () => {
+        document.getElementById('selectFileBtn').addEventListener('click', (e) => {
+            e.stopPropagation(); // 阻止事件冒泡
             document.getElementById('fileInput').click();
         });
         document.getElementById('fileInput').addEventListener('change', (e) => this.handleFileSelect(e));
 
         // 拖拽功能
         const dropZone = document.getElementById('fileDropZone');
-        dropZone.addEventListener('click', () => document.getElementById('fileInput').click());
+        dropZone.addEventListener('click', (e) => {
+            // 只有当点击的不是选择文件按钮时才触发
+            if (!e.target.closest('#selectFileBtn')) {
+                document.getElementById('fileInput').click();
+            }
+        });
         dropZone.addEventListener('dragover', (e) => this.handleFileDragOver(e));
         dropZone.addEventListener('dragleave', (e) => this.handleFileDragLeave(e));
         dropZone.addEventListener('drop', (e) => this.handleFileDrop(e));
@@ -342,6 +391,11 @@ class TravelPlanner {
         document.querySelector('#exportModal .close').addEventListener('click', () => this.closeExportModal());
         document.querySelector('.share-export').addEventListener('click', () => this.exportShareVersion());
         document.querySelector('.backup-export').addEventListener('click', () => this.exportBackupVersion());
+
+        // 冲突解决模态框
+        document.querySelector('#conflictResolutionModal .close').addEventListener('click', () => this.closeConflictResolutionModal());
+        document.getElementById('applyResolutionBtn').addEventListener('click', () => this.processConflictResolution());
+        document.getElementById('cancelImportBtn').addEventListener('click', () => this.closeConflictResolutionModal());
 
         // 设置模态框
         document.querySelector('#settingsModal .close').addEventListener('click', () => this.closeSettingsModal());
@@ -2612,13 +2666,18 @@ class TravelPlanner {
             }
         }
 
+        const createdAt = new Date().toISOString();
         const newScheme = {
-            id: Date.now(),
+            id: this.generateUniqueSchemeId(), // 使用新的唯一ID生成方法
+            uuid: this.generateSchemeUUID(schemeName, createdAt), // 基于名称和时间的UUID
             name: schemeName,
             travelList: [...this.travelList],
             routeSegments: Array.from(this.routeSegments.entries()),
-            createdAt: new Date().toISOString(),
-            placesCount: this.travelList.length
+            settings: { ...this.settings }, // 保存当前设置
+            createdAt: createdAt,
+            modifiedAt: createdAt, // 创建时修改时间等于创建时间
+            placesCount: this.travelList.length,
+            version: '2.0' // 方案格式版本
         };
 
         // 移除同名方案（如果存在）
@@ -2641,7 +2700,32 @@ class TravelPlanner {
     getSavedSchemes() {
         try {
             const schemes = localStorage.getItem('travelSchemes');
-            return schemes ? JSON.parse(schemes) : [];
+            let parsedSchemes = schemes ? JSON.parse(schemes) : [];
+
+            // 为旧方案添加UUID（如果没有的话）
+            let needsUpdate = false;
+            parsedSchemes = parsedSchemes.map(scheme => {
+                if (!scheme.uuid) {
+                    // 为旧方案生成基于名称和创建时间的UUID
+                    const createdAt = scheme.createdAt || new Date().toISOString();
+                    scheme.uuid = this.generateSchemeUUID(scheme.name, createdAt);
+                    scheme.version = scheme.version || '1.0';
+                    // 如果没有修改时间，设置为创建时间
+                    if (!scheme.modifiedAt) {
+                        scheme.modifiedAt = createdAt;
+                    }
+                    needsUpdate = true;
+                }
+                return scheme;
+            });
+
+            // 如果有方案被更新，保存回localStorage
+            if (needsUpdate) {
+                localStorage.setItem('travelSchemes', JSON.stringify(parsedSchemes));
+                console.log('✅ 为现有方案添加了UUID标识');
+            }
+
+            return parsedSchemes;
         } catch (error) {
             console.error('获取保存方案失败:', error);
             return [];
@@ -2795,6 +2879,7 @@ class TravelPlanner {
         scheme.settings = { ...this.settings };
         scheme.placesCount = this.travelList.length;
         scheme.modifiedAt = new Date().toISOString();
+        scheme.version = '2.0'; // 更新版本号
 
         // 保存更新后的方案列表
         localStorage.setItem('travelSchemes', JSON.stringify(schemes));
@@ -2902,13 +2987,27 @@ class TravelPlanner {
     exportBackupVersion() {
         this.closeExportModal();
 
+        // 获取所有保存的方案
+        const allSchemes = this.getSavedSchemes();
+
+        // 创建包含所有方案的备份数据
         const backupData = {
-            version: '1.0',
+            version: '2.0', // 升级版本号以支持多方案
             exportDate: new Date().toISOString(),
-            travelList: this.travelList,
-            routeSegments: Array.from(this.routeSegments.entries()),
+            type: 'full-backup', // 标识这是完整备份
+            currentData: {
+                travelList: this.travelList,
+                routeSegments: Array.from(this.routeSegments.entries()),
+                settings: this.settings,
+                currentSchemeId: this.currentSchemeId,
+                currentSchemeName: this.currentSchemeName
+            },
+            schemes: allSchemes, // 包含所有保存的方案
+            totalSchemes: allSchemes.length,
             totalPlaces: this.travelList.length,
-            cities: this.getAllCities()
+            allCities: this.getAllCities(),
+            exportSource: '17旅游规划助手',
+            formatDescription: '此文件包含所有保存的旅游方案，可导入到17旅游规划助手中'
         };
 
         const blob = new Blob([JSON.stringify(backupData, null, 2)], { type: 'application/json;charset=utf-8' });
@@ -2916,13 +3015,14 @@ class TravelPlanner {
 
         const a = document.createElement('a');
         a.href = url;
-        a.download = `旅游计划备份_${new Date().toLocaleDateString('zh-CN')}.json`;
+        const dateStr = new Date().toLocaleDateString('zh-CN').replace(/\//g, '');
+        a.download = `17旅游方案全备份_${dateStr}.json`;
         document.body.appendChild(a);
         a.click();
         document.body.removeChild(a);
         URL.revokeObjectURL(url);
 
-        this.showToast('备份版导出成功');
+        this.showToast(`备份导出成功，包含 ${allSchemes.length} 个方案`);
     }
 
     // 处理文件拖拽悬停
@@ -2992,12 +3092,50 @@ class TravelPlanner {
             return;
         }
 
-        // 检查必要字段
-        if (!data.travelList || !Array.isArray(data.travelList)) {
-            this.showToast('备份文件中缺少游玩地点数据');
+        // 检查数据版本和类型
+        if (data.version === '2.0' && data.type === 'full-backup') {
+            // 新格式：包含多个方案的完整备份
+            this.validateAndImportFullBackup(data);
+        } else if (data.travelList && Array.isArray(data.travelList)) {
+            // 旧格式：单个方案的备份
+            this.validateAndImportSingleScheme(data);
+        } else {
+            this.showToast('备份文件格式无效或不支持');
+            return;
+        }
+    }
+
+    // 验证并导入完整备份（新格式）
+    validateAndImportFullBackup(data) {
+        // 验证必要字段
+        if (!data.schemes || !Array.isArray(data.schemes)) {
+            this.showToast('备份文件中缺少方案数据');
             return;
         }
 
+        // 验证每个方案的数据完整性
+        for (let scheme of data.schemes) {
+            if (!scheme.name || !scheme.travelList || !Array.isArray(scheme.travelList)) {
+                this.showToast('备份文件中的方案数据不完整');
+                return;
+            }
+
+            // 验证方案中的地点数据
+            for (let place of scheme.travelList) {
+                if (!place.id || !place.name || !place.address ||
+                    typeof place.lat !== 'number' || typeof place.lng !== 'number') {
+                    this.showToast('备份文件中的地点数据不完整');
+                    return;
+                }
+            }
+        }
+
+        // 检查方案冲突
+        this.checkSchemeConflicts(data);
+    }
+
+    // 验证并导入单个方案（旧格式）
+    validateAndImportSingleScheme(data) {
         // 验证每个地点的数据完整性
         for (let place of data.travelList) {
             if (!place.id || !place.name || !place.address ||
@@ -3017,7 +3155,193 @@ class TravelPlanner {
         this.importTravelData(data);
     }
 
-    // 导入旅游数据
+    // 检查方案冲突
+    checkSchemeConflicts(importData) {
+        const existingSchemes = this.getSavedSchemes();
+        const conflicts = [];
+
+        // 检查每个要导入的方案是否与现有方案冲突
+        for (let importScheme of importData.schemes) {
+            // 确保导入方案有UUID（如果没有则生成）
+            if (!importScheme.uuid) {
+                const createdAt = importScheme.createdAt || new Date().toISOString();
+                importScheme.uuid = this.generateSchemeUUID(importScheme.name, createdAt);
+            }
+
+            // 检查UUID冲突（同一个方案）
+            const uuidConflict = existingSchemes.find(existing =>
+                existing.uuid === importScheme.uuid
+            );
+
+            // 检查名称冲突（不同方案但同名）
+            const nameConflict = existingSchemes.find(existing =>
+                existing.name === importScheme.name && existing.uuid !== importScheme.uuid
+            );
+
+            if (uuidConflict) {
+                // 同一个方案，检查修改时间
+                const existingModified = new Date(uuidConflict.modifiedAt || uuidConflict.createdAt);
+                const importModified = new Date(importScheme.modifiedAt || importScheme.createdAt);
+
+                if (importModified > existingModified) {
+                    // 导入的版本更新，标记为版本冲突
+                    conflicts.push({
+                        importScheme: importScheme,
+                        conflictType: 'version',
+                        existingScheme: uuidConflict,
+                        isNewer: true
+                    });
+                } else if (importModified.getTime() === existingModified.getTime()) {
+                    // 完全相同的版本，可以跳过（不添加到冲突列表）
+                    continue;
+                } else {
+                    // 导入的版本较旧
+                    conflicts.push({
+                        importScheme: importScheme,
+                        conflictType: 'version',
+                        existingScheme: uuidConflict,
+                        isNewer: false
+                    });
+                }
+            } else if (nameConflict) {
+                // 不同方案但同名
+                conflicts.push({
+                    importScheme: importScheme,
+                    conflictType: 'name',
+                    existingScheme: nameConflict
+                });
+            }
+        }
+
+        if (conflicts.length > 0) {
+            // 有冲突，显示冲突解决界面
+            this.showConflictResolutionModal(importData, conflicts);
+        } else {
+            // 没有冲突，直接导入
+            this.importFullBackup(importData);
+        }
+    }
+
+    // 显示冲突解决模态框
+    showConflictResolutionModal(importData, conflicts) {
+        this.pendingImportData = importData;
+        this.conflictResolutions.clear();
+
+        // 创建冲突解决界面
+        this.createConflictResolutionUI(conflicts);
+
+        // 显示模态框
+        document.getElementById('conflictResolutionModal').style.display = 'block';
+    }
+
+    // 创建冲突解决界面
+    createConflictResolutionUI(conflicts) {
+        const container = document.getElementById('conflictList');
+
+        container.innerHTML = conflicts.map((conflict, index) => {
+            const importScheme = conflict.importScheme;
+            const existingScheme = conflict.existingScheme;
+
+            return `
+                <div class="conflict-item">
+                    <div class="conflict-header">
+                        <h4>冲突 ${index + 1}: "${importScheme.name}"</h4>
+                                                <div class="conflict-type ${conflict.conflictType === 'version' ?
+                    (conflict.isNewer ? 'version-newer' : 'version-older') :
+                    'name-conflict'}">
+                            ${conflict.conflictType === 'version' ?
+                    (conflict.isNewer ? '⬆️ 版本更新' : '⬇️ 版本较旧') :
+                    '📝 同名方案'}
+                        </div>
+                    </div>
+                    
+                    <div class="conflict-details">
+                        <div class="scheme-comparison">
+                            <div class="scheme-info existing">
+                                <h5>现有方案</h5>
+                                <p><strong>名称:</strong> ${existingScheme.name}</p>
+                                <p><strong>地点数:</strong> ${existingScheme.placesCount}</p>
+                                <p><strong>创建时间:</strong> ${new Date(existingScheme.createdAt).toLocaleString('zh-CN')}</p>
+                                ${existingScheme.modifiedAt ? `<p><strong>修改时间:</strong> ${new Date(existingScheme.modifiedAt).toLocaleString('zh-CN')}</p>` : ''}
+                            </div>
+                            
+                            <div class="scheme-info importing">
+                                <h5>要导入的方案</h5>
+                                <p><strong>名称:</strong> ${importScheme.name}</p>
+                                <p><strong>地点数:</strong> ${importScheme.placesCount}</p>
+                                <p><strong>创建时间:</strong> ${new Date(importScheme.createdAt).toLocaleString('zh-CN')}</p>
+                                ${importScheme.modifiedAt ? `<p><strong>修改时间:</strong> ${new Date(importScheme.modifiedAt).toLocaleString('zh-CN')}</p>` : ''}
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="conflict-resolution">
+                        <h5>选择处理方式:</h5>
+                        <div class="resolution-options">
+                            ${conflict.conflictType === 'version' ? `
+                                <label>
+                                    <input type="radio" name="resolution_${index}" value="update" ${conflict.isNewer ? 'checked' : ''} />
+                                    <span>${conflict.isNewer ? '更新到新版本（推荐）' : '更新到此版本'}</span>
+                                </label>
+                                <label>
+                                    <input type="radio" name="resolution_${index}" value="keep" ${!conflict.isNewer ? 'checked' : ''} />
+                                    <span>保留现有版本</span>
+                                </label>
+                                <label>
+                                    <input type="radio" name="resolution_${index}" value="both" />
+                                    <span>同时保留两个版本</span>
+                                </label>
+                            ` : `
+                                <label>
+                                    <input type="radio" name="resolution_${index}" value="overwrite" />
+                                    <span>覆盖现有方案</span>
+                                </label>
+                                <label>
+                                    <input type="radio" name="resolution_${index}" value="rename" checked />
+                                    <span>重命名导入（推荐）</span>
+                                </label>
+                                <label>
+                                    <input type="radio" name="resolution_${index}" value="skip" />
+                                    <span>跳过此方案</span>
+                                </label>
+                            `}
+                        </div>
+                        
+                        <div class="rename-input" id="renameInput_${index}" ${conflict.conflictType === 'version' ? 'style="display: none;"' : ''}>
+                            <input type="text" placeholder="输入新名称..." 
+                                   value="${importScheme.name} (导入)" 
+                                   id="newName_${index}" />
+                        </div>
+                    </div>
+                </div>
+            `;
+        }).join('');
+
+        // 添加事件监听器
+        container.querySelectorAll('input[type="radio"]').forEach(radio => {
+            radio.addEventListener('change', (e) => {
+                const index = e.target.name.split('_')[1];
+                const renameInput = document.getElementById(`renameInput_${index}`);
+
+                if (e.target.value === 'rename' || e.target.value === 'both') {
+                    renameInput.style.display = 'block';
+                    if (e.target.value === 'both') {
+                        // 为版本冲突的"同时保留"选项设置不同的默认名称
+                        const newNameInput = document.getElementById(`newName_${index}`);
+                        const conflicts = document.querySelectorAll('.conflict-item');
+                        const conflictItem = conflicts[index];
+                        const schemeName = conflictItem.querySelector('h4').textContent.match(/"([^"]+)"/)[1];
+                        const currentTime = new Date().toLocaleDateString('zh-CN');
+                        newNameInput.value = `${schemeName} (${currentTime})`;
+                    }
+                } else {
+                    renameInput.style.display = 'none';
+                }
+            });
+        });
+    }
+
+    // 导入旅游数据（旧格式）
     importTravelData(data) {
         try {
             // 清除当前数据
@@ -3052,6 +3376,9 @@ class TravelPlanner {
             this.showToast(`成功导入 ${data.travelList.length} 个游玩地点`);
             this.closeImportModal();
 
+            // 重新加载方案列表
+            this.loadSavedSchemes();
+
             console.log('数据导入成功:', {
                 places: data.travelList.length,
                 cities: data.cities?.length || this.getAllCities().length,
@@ -3062,6 +3389,179 @@ class TravelPlanner {
             console.error('数据导入失败:', error);
             this.showToast('导入失败，请检查文件格式');
         }
+    }
+
+    // 导入完整备份（新格式）
+    importFullBackup(importData) {
+        try {
+            const existingSchemes = this.getSavedSchemes();
+            const importedSchemes = [];
+            const skippedSchemes = [];
+
+            // 处理每个方案
+            for (let importScheme of importData.schemes) {
+                // 检查是否有冲突解决方案（只在有冲突时才存在）
+                const resolution = this.conflictResolutions.get(importScheme.uuid || importScheme.name);
+
+                if (resolution === 'skip' || resolution === 'keep') {
+                    if (resolution === 'skip') {
+                        skippedSchemes.push(importScheme.name);
+                    }
+                    continue;
+                }
+
+                // 确保方案有UUID
+                if (!importScheme.uuid) {
+                    const createdAt = importScheme.createdAt || new Date().toISOString();
+                    importScheme.uuid = this.generateSchemeUUID(importScheme.name, createdAt);
+                }
+
+                // 处理重命名或同时保留两个版本
+                if (resolution && (resolution.startsWith('rename:') || resolution.startsWith('both:'))) {
+                    const newName = resolution.substring(resolution.indexOf(':') + 1);
+                    const originalUUID = importScheme.uuid;
+                    importScheme.name = newName;
+                    // 重新生成UUID以避免冲突
+                    const createdAt = importScheme.createdAt || new Date().toISOString();
+                    importScheme.uuid = this.generateSchemeUUID(newName, createdAt);
+                    // 生成新的ID以避免冲突
+                    importScheme.id = this.generateUniqueSchemeId();
+                }
+
+                // 处理覆盖或更新
+                if (resolution === 'overwrite' || resolution === 'update') {
+                    // 找到要覆盖的方案并移除
+                    const existingIndex = existingSchemes.findIndex(existing =>
+                        existing.name === importScheme.name ||
+                        (existing.uuid === importScheme.uuid && !resolution.startsWith('rename:') && !resolution.startsWith('both:'))
+                    );
+                    if (existingIndex !== -1) {
+                        existingSchemes.splice(existingIndex, 1);
+                    }
+                } else {
+                    // 对于其他情况（直接导入），也生成新的ID以避免冲突
+                    importScheme.id = this.generateUniqueSchemeId();
+                }
+
+                importedSchemes.push(importScheme);
+            }
+
+            // 合并方案
+            const allSchemes = [...existingSchemes, ...importedSchemes];
+            localStorage.setItem('travelSchemes', JSON.stringify(allSchemes));
+
+            // 导入当前数据（如果有）
+            if (importData.currentData && importData.currentData.travelList) {
+                this.travelList = [];
+                this.updateTravelList();
+                this.updateDistanceSummary(0, 0);
+                this.clearMarkers();
+
+                // 导入当前数据
+                this.travelList = [...importData.currentData.travelList];
+
+                // 恢复路线段配置
+                this.routeSegments.clear();
+                if (importData.currentData.routeSegments && Array.isArray(importData.currentData.routeSegments)) {
+                    importData.currentData.routeSegments.forEach(([key, value]) => {
+                        this.routeSegments.set(key, value);
+                    });
+                }
+
+                // 更新界面
+                this.updateTravelList();
+                this.calculateDistances();
+
+                // 重新创建标记和路线
+                this.travelList.forEach(place => this.addMarker(place));
+                this.drawRoute();
+
+                // 保存数据
+                this.saveData();
+            }
+
+            // 显示成功消息
+            let message = `成功导入 ${importedSchemes.length} 个方案`;
+            if (skippedSchemes.length > 0) {
+                message += `，跳过 ${skippedSchemes.length} 个方案`;
+            }
+
+            // 统计处理类型
+            const updateCount = Array.from(this.conflictResolutions.values()).filter(r => r === 'update').length;
+            const overwriteCount = Array.from(this.conflictResolutions.values()).filter(r => r === 'overwrite').length;
+            const renameCount = Array.from(this.conflictResolutions.values()).filter(r => r.startsWith('rename:')).length;
+            const bothCount = Array.from(this.conflictResolutions.values()).filter(r => r.startsWith('both:')).length;
+
+            if (updateCount > 0) message += `，更新 ${updateCount} 个`;
+            if (overwriteCount > 0) message += `，覆盖 ${overwriteCount} 个`;
+            if (renameCount > 0) message += `，重命名 ${renameCount} 个`;
+            if (bothCount > 0) message += `，保留副本 ${bothCount} 个`;
+
+            if (importData.currentData && importData.currentData.travelList) {
+                message += `，当前显示 ${importData.currentData.travelList.length} 个地点`;
+            }
+
+            this.showToast(message);
+            this.closeImportModal();
+            this.closeConflictResolutionModal();
+
+            // 重新加载方案列表以显示导入的方案
+            this.loadSavedSchemes();
+
+            console.log('完整备份导入成功:', {
+                schemes: importedSchemes.length,
+                skipped: skippedSchemes.length,
+                currentPlaces: importData.currentData?.travelList?.length || 0,
+                exportDate: importData.exportDate
+            });
+
+        } catch (error) {
+            console.error('完整备份导入失败:', error);
+            this.showToast('导入失败，请检查文件格式');
+        }
+    }
+
+    // 处理冲突解决
+    processConflictResolution() {
+        const conflicts = document.querySelectorAll('.conflict-item');
+        this.conflictResolutions.clear();
+
+        for (let i = 0; i < conflicts.length; i++) {
+            const selectedRadio = document.querySelector(`input[name="resolution_${i}"]:checked`);
+            if (!selectedRadio) continue;
+
+            const resolution = selectedRadio.value;
+            const conflictItem = conflicts[i];
+            const schemeName = conflictItem.querySelector('h4').textContent.match(/"([^"]+)"/)[1];
+
+            // 从冲突数据中获取UUID
+            const conflictData = this.pendingImportData.schemes.find(scheme => scheme.name === schemeName);
+            const schemeKey = conflictData ? conflictData.uuid : schemeName;
+
+            if (resolution === 'rename' || resolution === 'both') {
+                const newNameInput = document.getElementById(`newName_${i}`);
+                const newName = newNameInput.value.trim();
+                if (!newName) {
+                    this.showToast('请为所有重命名的方案输入新名称');
+                    return;
+                }
+                this.conflictResolutions.set(schemeKey, `${resolution}:${newName}`);
+            } else {
+                this.conflictResolutions.set(schemeKey, resolution);
+            }
+        }
+
+        // 执行导入
+        this.importFullBackup(this.pendingImportData);
+    }
+
+    // 关闭冲突解决模态框
+    closeConflictResolutionModal() {
+        document.getElementById('conflictResolutionModal').style.display = 'none';
+        this.pendingImportData = null;
+        this.conflictResolutions.clear();
+        // 确保导入模态框也被关闭
+        this.closeImportModal();
     }
 
     // 截取地图截图

@@ -158,9 +158,10 @@
                 <div class="import-info">
                     <h4>📋 说明</h4>
                     <ul>
-                        <li>仅支持本应用导出的JSON备份文件</li>
-                        <li>导入将替换当前所有游玩地点</li>
-                        <li>建议导入前先保存当前方案</li>
+                        <li>支持导入本应用导出的所有方案备份</li>
+                        <li>智能检测方案冲突并提供解决方案</li>
+                        <li>可选择更新、重命名或保留现有方案</li>
+                        <li>根据修改时间判断方案版本新旧</li>
                     </ul>
                 </div>
             </div>
@@ -185,7 +186,7 @@
                     <div class="export-card" id="exportBackupCard">
                         <div class="export-icon">💾</div>
                         <h4>数据备份版</h4>
-                        <p>导出JSON格式的完整数据，可用于备份和恢复旅游计划</p>
+                        <p>导出所有方案的完整备份，支持智能冲突解决和版本管理</p>
                         <button class="export-btn backup-export">导出备份版</button>
                     </div>
                 </div>
@@ -375,6 +376,26 @@
                 <div class="edit-actions">
                     <button id="saveEditBtn" class="save-edit-btn">💾 保存修改</button>
                     <button id="cancelEditBtn" class="cancel-edit-btn">取消</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 冲突解决模态框 -->
+    <div id="conflictResolutionModal" class="modal">
+        <div class="modal-content large-modal">
+            <span class="close">&times;</span>
+            <h3>🔄 方案冲突解决</h3>
+            <div class="conflict-resolution-content">
+                <div class="conflict-header">
+                    <p>检测到以下方案冲突，请选择处理方式：</p>
+                </div>
+                <div id="conflictList" class="conflict-list">
+                    <!-- 冲突列表将在这里动态生成 -->
+                </div>
+                <div class="conflict-actions">
+                    <button id="applyResolutionBtn" class="primary-btn">应用解决方案</button>
+                    <button id="cancelImportBtn" class="secondary-btn">取消导入</button>
                 </div>
             </div>
         </div>
