@@ -2897,6 +2897,46 @@ class TravelPlanner {
             return;
         }
 
+        // 检查是否有未保存的更改
+        if (this.hasUnsavedChanges && this.travelList.length > 0) {
+            this.showUnsavedChangesDialog(schemeId, scheme.name);
+            return;
+        }
+
+        // 执行实际的方案加载
+        this.performSchemeLoad(schemeId, scheme);
+    }
+
+    // 显示未保存更改对话框
+    showUnsavedChangesDialog(targetSchemeId, targetSchemeName) {
+        const currentName = this.currentSchemeName || '未命名方案';
+
+        const choice = confirm(
+            `⚠️ 当前方案"${currentName}"有未保存的更改。\n\n切换到"${targetSchemeName}"将会丢失这些更改。\n\n是否继续切换？\n\n点击"确定"继续切换（丢失更改）\n点击"取消"留在当前方案`
+        );
+
+        if (choice) {
+            // 用户选择继续切换，直接切换到目标方案
+            this.discardChangesAndSwitch(targetSchemeId, targetSchemeName);
+        }
+        // 如果用户选择取消，则什么都不做（保持当前方案）
+    }
+
+
+
+    // 放弃更改并切换
+    discardChangesAndSwitch(targetSchemeId, targetSchemeName) {
+        // 直接切换到目标方案
+        const schemes = this.getSavedSchemes();
+        const scheme = schemes.find(s => s.id === targetSchemeId);
+        if (scheme) {
+            this.performSchemeLoad(targetSchemeId, scheme);
+            this.showToast(`已切换到方案"${targetSchemeName}"`);
+        }
+    }
+
+    // 执行实际的方案加载
+    performSchemeLoad(schemeId, scheme) {
         // 保存当前方案标识
         this.currentSchemeId = schemeId;
         this.currentSchemeName = scheme.name;
