@@ -53,6 +53,8 @@ class TravelPlanner {
         // 当前方案管理
         this.currentSchemeId = null;
         this.currentSchemeName = null;
+        this.hasUnsavedChanges = false; // 跟踪是否有未保存的更改
+        this.isAutoSaving = false; // 防止自动保存时的递归调用
 
         // 导入冲突处理状态
         this.pendingImportData = null;
@@ -101,10 +103,93 @@ class TravelPlanner {
         return timestamp * 1000 + random + counter;
     }
 
+    // 标记方案为已修改并触发自动保存
+    markAsModified() {
+        if (this.isAutoSaving) return; // 防止递归调用
+
+        this.hasUnsavedChanges = true;
+        this.updatePageTitle(); // 更新页面标题
+
+        // 如果有当前方案，自动保存
+        if (this.currentSchemeId && this.currentSchemeName) {
+            this.autoSaveCurrentScheme();
+        }
+    }
+
+    // 自动保存到当前方案
+    autoSaveCurrentScheme() {
+        if (!this.currentSchemeId || !this.currentSchemeName || this.isAutoSaving) {
+            return;
+        }
+
+        this.isAutoSaving = true;
+
+        try {
+            const schemes = this.getSavedSchemes();
+            const currentScheme = schemes.find(s => s.id === this.currentSchemeId);
+
+            if (currentScheme) {
+                // 更新方案数据
+                currentScheme.travelList = [...this.travelList];
+                currentScheme.routeSegments = Array.from(this.routeSegments.entries());
+                currentScheme.settings = { ...this.settings };
+                currentScheme.placesCount = this.travelList.length;
+                currentScheme.modifiedAt = new Date().toISOString();
+                currentScheme.version = '2.0';
+
+                // 保存更新后的方案列表
+                localStorage.setItem('travelSchemes', JSON.stringify(schemes));
+
+                // 标记为已保存
+                this.hasUnsavedChanges = false;
+                this.updatePageTitle(); // 更新页面标题
+
+                console.log(`✅ 自动保存方案"${this.currentSchemeName}"成功`);
+            }
+        } catch (error) {
+            console.error('自动保存失败:', error);
+        } finally {
+            this.isAutoSaving = false;
+        }
+    }
+
+    // 设置页面关闭时的处理
+    setupPageUnloadHandler() {
+        window.addEventListener('beforeunload', (e) => {
+            // 只有在有未保存更改且没有当前方案时才提醒
+            if (this.hasUnsavedChanges && !this.currentSchemeId && this.travelList.length > 0) {
+                const message = '您有未保存的旅游方案，确定要离开吗？';
+                e.preventDefault();
+                e.returnValue = message;
+                return message;
+            }
+        });
+    }
+
+    // 更新页面标题显示保存状态
+    updatePageTitle() {
+        const baseTitle = '17旅游规划助手';
+        let title = baseTitle;
+
+        if (this.currentSchemeName) {
+            title = `${this.currentSchemeName} - ${baseTitle}`;
+            if (this.hasUnsavedChanges) {
+                title = `${this.currentSchemeName} (已修改) - ${baseTitle}`;
+            }
+        } else if (this.hasUnsavedChanges && this.travelList.length > 0) {
+            title = `未保存的方案 - ${baseTitle}`;
+        }
+
+        document.title = title;
+    }
+
     // 初始化应用程序
     initializeApp() {
         // 首先加载保存的设置
         this.loadSavedSettings();
+
+        // 设置页面关闭时的提醒
+        this.setupPageUnloadHandler();
 
         // 然后检查并初始化地图
         this.waitForGoogleMaps();
@@ -213,6 +298,7 @@ class TravelPlanner {
         this.setupEventListeners();
         this.initGoogleMap();
         this.loadSavedData();
+        this.updatePageTitle(); // 更新页面标题
     }
 
     // 初始化演示模式
@@ -365,6 +451,11 @@ class TravelPlanner {
         document.getElementById('saveNewSchemeBtn').addEventListener('click', () => this.saveNewScheme());
         document.getElementById('schemeNameInput').addEventListener('keypress', (e) => {
             if (e.key === 'Enter') this.saveNewScheme();
+        });
+
+        // 添加实时检查方案名称的监听器
+        document.getElementById('schemeNameInput').addEventListener('input', () => {
+            this.checkSchemeNameAvailability();
         });
 
         // 导入模态框
@@ -763,6 +854,11 @@ class TravelPlanner {
         document.getElementById('saveSchemeModal').style.display = 'block';
         this.loadSavedSchemes();
         document.getElementById('schemeNameInput').value = '';
+
+        // 重置警告信息和按钮状态
+        document.getElementById('schemeNameWarning').style.display = 'none';
+        document.getElementById('saveNewSchemeBtn').disabled = true;
+
         document.getElementById('schemeNameInput').focus();
     }
 
@@ -1011,6 +1107,7 @@ class TravelPlanner {
         this.updateTravelList();
         this.recreateMarkers(); // 重新创建标记以更新名称
         this.saveData();
+        this.markAsModified(); // 标记为已修改
 
         // 关闭模态框
         this.closeEditPlaceModal();
@@ -1058,6 +1155,7 @@ class TravelPlanner {
         this.calculateDistances();
         this.drawRoute();
         this.saveData();
+        this.markAsModified(); // 标记为已修改
     }
 
     // 添加当前地点到游玩列表
@@ -1092,6 +1190,7 @@ class TravelPlanner {
         this.drawRoute(); // 添加地点后重新绘制路线
         this.closeModal();
         this.saveData();
+        this.markAsModified(); // 标记为已修改
     }
 
     // 更新游玩列表显示
@@ -1275,6 +1374,7 @@ class TravelPlanner {
             this.calculateDistances();
             this.drawRoute();
             this.saveData();
+            this.markAsModified(); // 标记为已修改
         }
     }
 
@@ -1461,6 +1561,7 @@ class TravelPlanner {
         this.drawRoute(); // 删除地点后重新绘制路线
         this.removeMarker(id);
         this.saveData();
+        this.markAsModified(); // 标记为已修改
 
         // 删除地点后更新城市过滤状态
         this.updateCityFilterButton();
@@ -2030,6 +2131,7 @@ class TravelPlanner {
 
         // 保存数据
         this.saveData();
+        this.markAsModified(); // 标记为已修改
         console.log(`地图提供商已更改为: ${provider}`);
     }
 
@@ -2536,11 +2638,16 @@ class TravelPlanner {
 
         if (confirm('确定要清空所有游玩地点和待定地点吗？')) {
             this.travelList = [];
+            this.currentSchemeId = null; // 清空当前方案标识
+            this.currentSchemeName = null;
+            this.hasUnsavedChanges = false; // 清空后重置为未修改状态
+            this.updatePageTitle(); // 更新页面标题
             this.updateTravelList();
             this.updateDistanceSummary(0, 0);
             this.drawRoute(); // 清空后确保路线也被清除
             this.clearMarkers();
             this.saveData();
+            this.loadSavedSchemes(); // 刷新方案列表显示
         }
     }
 
@@ -2562,6 +2669,7 @@ class TravelPlanner {
             this.calculateDistances();
             this.drawRoute();
             this.saveData();
+            this.markAsModified(); // 标记为已修改
             alert('路线已优化！');
         }
     }
@@ -2661,9 +2769,8 @@ class TravelPlanner {
 
         // 检查是否重名
         if (schemes.some(scheme => scheme.name === schemeName)) {
-            if (!confirm('已存在同名方案，是否覆盖？')) {
-                return;
-            }
+            this.showToast('已存在相同名称的方案，请使用不同的名称');
+            return;
         }
 
         const createdAt = new Date().toISOString();
@@ -2689,6 +2796,8 @@ class TravelPlanner {
         // 将新保存的方案设为当前方案
         this.currentSchemeId = newScheme.id;
         this.currentSchemeName = schemeName;
+        this.hasUnsavedChanges = false; // 重置未保存状态
+        this.updatePageTitle(); // 更新页面标题
 
         this.showToast(`方案"${schemeName}"保存成功并已设为当前方案`);
 
@@ -2791,6 +2900,8 @@ class TravelPlanner {
         // 保存当前方案标识
         this.currentSchemeId = schemeId;
         this.currentSchemeName = scheme.name;
+        this.hasUnsavedChanges = false; // 重置未保存状态
+        this.updatePageTitle(); // 更新页面标题
 
         // 直接清除当前数据并加载新方案
         this.travelList = [];
@@ -2844,6 +2955,8 @@ class TravelPlanner {
         if (this.currentSchemeId === schemeId) {
             this.currentSchemeId = null;
             this.currentSchemeName = null;
+            this.hasUnsavedChanges = this.travelList.length > 0; // 如果有数据则标记为未保存
+            this.updatePageTitle(); // 更新页面标题
         }
 
         const filteredSchemes = schemes.filter(s => s.id !== schemeId);
@@ -3192,7 +3305,7 @@ class TravelPlanner {
                         isNewer: true
                     });
                 } else if (importModified.getTime() === existingModified.getTime()) {
-                    // 完全相同的版本，可以跳过（不添加到冲突列表）
+                    // 完全相同的版本，跳过不显示
                     continue;
                 } else {
                     // 导入的版本较旧
@@ -3308,6 +3421,12 @@ class TravelPlanner {
                         </div>
                         
                         <div class="rename-input" id="renameInput_${index}" ${conflict.conflictType === 'version' ? 'style="display: none;"' : ''}>
+                            <div class="rename-header">
+                                <div class="rename-label">冲突方案重命名为：</div>
+                                <div class="rename-warning" id="renameWarning_${index}" style="display: none;">
+                                    ⚠️ 名称已存在
+                                </div>
+                            </div>
                             <input type="text" placeholder="输入新名称..." 
                                    value="${importScheme.name} (导入)" 
                                    id="newName_${index}" />
@@ -3334,10 +3453,23 @@ class TravelPlanner {
                         const currentTime = new Date().toLocaleDateString('zh-CN');
                         newNameInput.value = `${schemeName} (${currentTime})`;
                     }
+                    // 添加输入检查事件监听器
+                    const newNameInput = document.getElementById(`newName_${index}`);
+                    this.addRenameInputListener(newNameInput, index);
                 } else {
                     renameInput.style.display = 'none';
                 }
             });
+        });
+
+        // 为已显示的重命名输入框添加监听器
+        container.querySelectorAll('.rename-input').forEach((renameInput, index) => {
+            if (renameInput.style.display !== 'none') {
+                const newNameInput = document.getElementById(`newName_${index}`);
+                if (newNameInput) {
+                    this.addRenameInputListener(newNameInput, index);
+                }
+            }
         });
     }
 
@@ -3371,6 +3503,12 @@ class TravelPlanner {
 
             // 保存数据
             this.saveData();
+
+            // 清空当前方案状态（因为导入的是新数据）
+            this.currentSchemeId = null;
+            this.currentSchemeName = null;
+            this.hasUnsavedChanges = true; // 导入后标记为未保存
+            this.updatePageTitle(); // 更新页面标题
 
             // 显示成功消息
             this.showToast(`成功导入 ${data.travelList.length} 个游玩地点`);
@@ -3521,6 +3659,83 @@ class TravelPlanner {
         }
     }
 
+    // 验证方案名称是否可用
+    validateSchemeName(name, excludeSchemeId = null) {
+        const existingSchemes = this.getSavedSchemes();
+        return !existingSchemes.some(scheme =>
+            scheme.name === name &&
+            (excludeSchemeId === null || scheme.id !== excludeSchemeId)
+        );
+    }
+
+    // 为重命名输入框添加实时检查监听器
+    addRenameInputListener(inputElement, index) {
+        if (!inputElement) return;
+
+        // 移除已有的监听器（如果存在）
+        inputElement.removeEventListener('input', inputElement._renameCheckListener);
+
+        // 创建新的监听器
+        inputElement._renameCheckListener = () => {
+            this.checkConflictRenameAvailability(index);
+        };
+
+        // 添加监听器
+        inputElement.addEventListener('input', inputElement._renameCheckListener);
+
+        // 初始检查
+        this.checkConflictRenameAvailability(index);
+    }
+
+    // 检查冲突解决中的重命名是否可用
+    checkConflictRenameAvailability(index) {
+        const nameInput = document.getElementById(`newName_${index}`);
+        const warning = document.getElementById(`renameWarning_${index}`);
+
+        if (!nameInput || !warning) return;
+
+        const newName = nameInput.value.trim();
+
+        if (!newName) {
+            warning.style.display = 'none';
+            return;
+        }
+
+        // 检查是否与现有方案重名
+        const isAvailable = this.validateSchemeName(newName);
+
+        if (!isAvailable) {
+            warning.style.display = 'block';
+        } else {
+            warning.style.display = 'none';
+        }
+    }
+
+    // 检查方案名称可用性并更新UI
+    checkSchemeNameAvailability() {
+        const nameInput = document.getElementById('schemeNameInput');
+        const warning = document.getElementById('schemeNameWarning');
+        const saveBtn = document.getElementById('saveNewSchemeBtn');
+        const schemeName = nameInput.value.trim();
+
+        if (!schemeName) {
+            // 名称为空
+            warning.style.display = 'none';
+            saveBtn.disabled = true;
+            return;
+        }
+
+        if (!this.validateSchemeName(schemeName)) {
+            // 名称重复
+            warning.style.display = 'block';
+            saveBtn.disabled = true;
+        } else {
+            // 名称可用
+            warning.style.display = 'none';
+            saveBtn.disabled = false;
+        }
+    }
+
     // 处理冲突解决
     processConflictResolution() {
         const conflicts = document.querySelectorAll('.conflict-item');
@@ -3545,6 +3760,14 @@ class TravelPlanner {
                     this.showToast('请为所有重命名的方案输入新名称');
                     return;
                 }
+
+                // 检查重命名是否与现有方案重名
+                if (!this.validateSchemeName(newName)) {
+                    this.showToast(`方案名称"${newName}"已存在，请重新命名`);
+                    newNameInput.focus();
+                    return;
+                }
+
                 this.conflictResolutions.set(schemeKey, `${resolution}:${newName}`);
             } else {
                 this.conflictResolutions.set(schemeKey, resolution);
