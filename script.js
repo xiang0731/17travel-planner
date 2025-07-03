@@ -2840,6 +2840,17 @@ class TravelPlanner {
                     }
                     needsUpdate = true;
                 }
+
+                // 为旧地点添加默认的isPending状态
+                if (scheme.travelList && Array.isArray(scheme.travelList)) {
+                    scheme.travelList.forEach(place => {
+                        if (place.isPending === undefined) {
+                            place.isPending = false;
+                            needsUpdate = true;
+                        }
+                    });
+                }
+
                 return scheme;
             });
 
@@ -2870,7 +2881,7 @@ class TravelPlanner {
         schemes.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
 
         container.innerHTML = schemes.map(scheme => {
-            const date = new Date(scheme.createdAt).toLocaleString('zh-CN', {
+            const createdDate = new Date(scheme.createdAt).toLocaleString('zh-CN', {
                 year: 'numeric',
                 month: '2-digit',
                 day: '2-digit',
@@ -2878,10 +2889,32 @@ class TravelPlanner {
                 minute: '2-digit'
             });
 
+            // 计算游玩列表和待定列表的个数
+            const activePlaces = scheme.travelList ? scheme.travelList.filter(place => !place.isPending) : [];
+            const pendingPlaces = scheme.travelList ? scheme.travelList.filter(place => place.isPending) : [];
+            const activeCount = activePlaces.length;
+            const pendingCount = pendingPlaces.length;
+            const totalCount = activeCount + pendingCount;
+
+            // 格式化修改时间
+            const modifiedDate = scheme.modifiedAt ? new Date(scheme.modifiedAt).toLocaleString('zh-CN', {
+                year: 'numeric',
+                month: '2-digit',
+                day: '2-digit',
+                hour: '2-digit',
+                minute: '2-digit'
+            }) : createdDate;
+
             const isCurrentScheme = this.currentSchemeId === scheme.id;
             const schemeItemClass = isCurrentScheme ? 'scheme-item current-scheme' : 'scheme-item';
             const loadButtonText = isCurrentScheme ? '当前' : '切换';
             const loadButtonClass = isCurrentScheme ? 'scheme-btn current-scheme-btn' : 'scheme-btn load-scheme-btn';
+
+            // 构建详细信息
+            const detailInfo = [];
+            if (activeCount > 0) detailInfo.push(`${activeCount}个游玩`);
+            if (pendingCount > 0) detailInfo.push(`${pendingCount}个待定`);
+            if (detailInfo.length === 0) detailInfo.push('无地点');
 
             return `
                 <div class="${schemeItemClass}">
@@ -2890,7 +2923,17 @@ class TravelPlanner {
                             ${isCurrentScheme ? '📌 ' : ''}${scheme.name}
                             ${isCurrentScheme ? ' <span class="current-badge">当前方案</span>' : ''}
                         </div>
-                        <div class="scheme-date">${date} · ${scheme.placesCount}个地点</div>
+                        <div class="scheme-date">
+                            <div class="scheme-time-info">
+                                <span class="created-time">📅 创建：${createdDate}</span>
+                                ${scheme.modifiedAt && scheme.modifiedAt !== scheme.createdAt ?
+                    `<span class="modified-time">✏️ 修改：${modifiedDate}</span>` : ''}
+                            </div>
+                            <div class="scheme-counts">
+                                <span class="places-info">📍 ${detailInfo.join('，')}</span>
+                                <span class="total-info">（共${totalCount}个地点）</span>
+                            </div>
+                        </div>
                     </div>
                     <div class="scheme-actions">
                         <button class="${loadButtonClass}" onclick="app.loadScheme(${scheme.id})" ${isCurrentScheme ? 'disabled' : ''}>${loadButtonText}</button>

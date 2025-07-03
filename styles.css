@@ -1178,7 +1178,7 @@ header p {
 }
 
 .schemes-list {
-    max-height: 250px;
+    max-height: 350px;
     overflow-y: auto;
     border: 1px solid #ecf0f1;
     border-radius: 8px;
@@ -1188,13 +1188,14 @@ header p {
 .scheme-item {
     display: flex;
     justify-content: space-between;
-    align-items: center;
-    padding: 12px 15px;
+    align-items: flex-start;
+    padding: 15px 18px;
     border: 2px solid #ecf0f1;
     border-radius: 8px;
-    margin-bottom: 10px;
+    margin-bottom: 12px;
     background: #fafbfc;
     transition: all 0.3s ease;
+    min-height: 110px;
 }
 
 .scheme-item:hover {
@@ -1204,27 +1205,130 @@ header p {
 
 .scheme-info {
     flex: 1;
+    margin-right: 15px;
 }
 
 .scheme-name {
     font-weight: 600;
     color: #2c3e50;
-    margin-bottom: 4px;
+    margin-bottom: 8px;
     position: relative;
     z-index: 2;
     display: flex;
     align-items: center;
     flex-wrap: wrap;
+    font-size: 14px;
 }
 
 .scheme-date {
     font-size: 12px;
     color: #7f8c8d;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.scheme-time-info {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    margin-bottom: 8px;
+}
+
+.created-time,
+.modified-time {
+    font-size: 11px;
+    color: #95a5a6;
+}
+
+.modified-time {
+    color: #e67e22;
+}
+
+.scheme-counts {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.places-info {
+    font-size: 12px;
+    color: #2c3e50;
+    font-weight: 500;
+}
+
+.total-info {
+    font-size: 11px;
+    color: #7f8c8d;
+}
+
+/* 方案列表响应式样式 */
+@media (max-width: 768px) {
+    .scheme-item {
+        flex-direction: column;
+        align-items: stretch;
+        padding: 12px 15px;
+        min-height: auto;
+    }
+
+    .scheme-info {
+        margin-right: 0;
+        margin-bottom: 10px;
+    }
+
+    .scheme-actions {
+        flex-direction: row;
+        align-items: center;
+        justify-content: flex-end;
+        margin-top: 0;
+    }
+
+    .scheme-time-info {
+        margin-bottom: 6px;
+    }
+
+    .created-time,
+    .modified-time {
+        font-size: 10px;
+    }
+
+    .places-info {
+        font-size: 11px;
+    }
+
+    .total-info {
+        font-size: 10px;
+    }
+
+    .schemes-list {
+        max-height: 300px;
+    }
+}
+
+/* 确保方案信息的完整性 */
+.scheme-date {
+    line-height: 1.3;
+}
+
+.scheme-counts {
+    padding-top: 2px;
+    border-top: 1px solid rgba(236, 240, 241, 0.5);
+    margin-top: 4px;
+}
+
+.empty-schemes {
+    text-align: center;
+    color: #95a5a6;
+    padding: 30px 20px;
+    font-style: italic;
 }
 
 .scheme-actions {
     display: flex;
     gap: 8px;
+    flex-direction: column;
+    align-items: flex-end;
+    margin-top: 8px;
 }
 
 .scheme-btn {
