@@ -1104,6 +1104,10 @@ header p {
     display: flex;
     flex-direction: column;
     gap: 25px;
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    padding: 5px;
 }
 
 .save-new-scheme h4,
@@ -1301,6 +1305,10 @@ header p {
     display: flex;
     flex-direction: column;
     gap: 20px;
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    padding: 5px;
 }
 
 .export-option {
@@ -1382,6 +1390,10 @@ header p {
     display: flex;
     flex-direction: column;
     gap: 25px;
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    padding: 5px;
 }
 
 .import-area {
@@ -2162,6 +2174,21 @@ header p {
     animation: settingsModalShow 0.3s ease-out;
 }
 
+/* 统一模态框样式（方案、导入、导出） */
+.unified-modal-content {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    margin: 0;
+    max-width: 900px;
+    width: 90vw;
+    max-height: 85vh;
+    display: flex;
+    flex-direction: column;
+    animation: settingsModalShow 0.3s ease-out;
+}
+
 .settings-container {
     display: flex;
     flex: 1;
@@ -2537,7 +2564,9 @@ header p {
 
 /* 移动端二级菜单样式覆盖 */
 @media (max-width: 768px) {
-    .settings-modal-content {
+
+    .settings-modal-content,
+    .unified-modal-content {
         width: 95vw !important;
         max-height: 90vh !important;
     }
