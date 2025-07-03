@@ -2709,6 +2709,8 @@ class TravelPlanner {
             travelList: this.travelList,
             routeSegments: Array.from(this.routeSegments.entries()),
             settings: this.settings,
+            currentSchemeId: this.currentSchemeId,
+            currentSchemeName: this.currentSchemeName,
             lastSaved: new Date().toISOString()
         }));
     }
@@ -2733,6 +2735,13 @@ class TravelPlanner {
                     this.routeSegments = new Map(data.routeSegments);
                 }
 
+                // 恢复当前方案信息
+                this.currentSchemeId = data.currentSchemeId || null;
+                this.currentSchemeName = data.currentSchemeName || null;
+
+                // 更新页面标题
+                this.updatePageTitle();
+
                 this.updateTravelList();
                 this.calculateDistances();
 
@@ -2746,6 +2755,9 @@ class TravelPlanner {
                 this.updateCityFilterButton();
 
                 console.log('✅ 已加载保存的旅游数据');
+                if (this.currentSchemeName) {
+                    console.log(`📌 当前方案: ${this.currentSchemeName}`);
+                }
             }
         } catch (error) {
             console.error('加载保存数据失败:', error);
@@ -2798,6 +2810,9 @@ class TravelPlanner {
         this.currentSchemeName = schemeName;
         this.hasUnsavedChanges = false; // 重置未保存状态
         this.updatePageTitle(); // 更新页面标题
+
+        // 保存数据，包括当前方案信息
+        this.saveData();
 
         this.showToast(`方案"${schemeName}"保存成功并已设为当前方案`);
 
@@ -2973,6 +2988,9 @@ class TravelPlanner {
         this.showToast(`已切换到方案"${scheme.name}"`);
         this.closeSaveSchemeModal();
 
+        // 保存数据，包括当前方案信息
+        this.saveData();
+
         // 更新方案列表显示当前方案
         setTimeout(() => this.loadSavedSchemes(), 100);
     }
@@ -2997,6 +3015,7 @@ class TravelPlanner {
             this.currentSchemeName = null;
             this.hasUnsavedChanges = this.travelList.length > 0; // 如果有数据则标记为未保存
             this.updatePageTitle(); // 更新页面标题
+            this.saveData(); // 保存更新后的状态
         }
 
         const filteredSchemes = schemes.filter(s => s.id !== schemeId);
@@ -3040,6 +3059,7 @@ class TravelPlanner {
         // 如果覆盖的是当前方案，保持当前方案状态
         if (this.currentSchemeId === schemeId) {
             this.currentSchemeName = scheme.name;
+            this.saveData(); // 保存更新后的状态
         }
 
         this.showToast(`方案"${scheme.name}"已覆盖`);
