@@ -156,6 +156,7 @@ header p {
 .clear-btn,
 .optimize-btn,
 .show-route-btn,
+.add-blank-btn,
 .add-btn {
     padding: 12px 18px;
     background: linear-gradient(135deg, #667eea, #764ba2);
@@ -173,6 +174,7 @@ header p {
 .clear-btn:hover,
 .optimize-btn:hover,
 .show-route-btn:hover,
+.add-blank-btn:hover,
 .add-btn:hover {
     transform: translateY(-2px);
     box-shadow: 0 5px 15px rgba(102, 126, 234, 0.4);
@@ -318,6 +320,10 @@ header p {
     flex-wrap: wrap;
 }
 
+.add-blank-btn {
+    flex: 1;
+}
+
 .clear-btn {
     background: linear-gradient(135deg, #e74c3c, #c0392b);
     flex: 1;
@@ -338,6 +344,25 @@ header p {
 .travel-list {
     list-style: none;
     margin-bottom: 15px;
+}
+
+/* 无坐标路线段样式 */
+.route-line.no-coordinates {
+    background: repeating-linear-gradient(90deg,
+            #ddd 0px,
+            #ddd 5px,
+            transparent 5px,
+            transparent 10px);
+}
+
+.route-info-card.disabled {
+    opacity: 0.6;
+    background: #f5f5f5;
+}
+
+.route-info-card.disabled .distance-info {
+    color: #999;
+    font-style: italic;
 }
 
 .travel-item {
@@ -3183,4 +3208,29 @@ header p {
         font-size: 11px;
         padding: 1px 4px;
     }
+}
+
+/* 空白地点样式 */
+.travel-item.blank-item {
+    border-left-color: #667eea;
+    background: linear-gradient(135deg, #f8f9ff 0%, #f0f2ff 100%);
+}
+
+.travel-item.blank-item:hover {
+    background: linear-gradient(135deg, #e9ecff 0%, #e0e6ff 100%);
+}
+
+.travel-item.blank-item .travel-item-order {
+    color: #667eea;
+    font-weight: bold;
+}
+
+.travel-item.blank-item .travel-item-name {
+    color: #667eea;
+    font-style: italic;
+}
+
+.travel-item.blank-item .travel-item-address {
+    color: #999;
+    font-style: italic;
 }

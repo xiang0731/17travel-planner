@@ -394,6 +394,7 @@ class TravelPlanner {
         });
 
         // 列表控制按钮
+        document.getElementById('addBlankPlaceBtn').addEventListener('click', () => this.addBlankPlace());
         document.getElementById('clearAllBtn').addEventListener('click', () => this.clearAllPlaces());
         document.getElementById('optimizeRouteBtn').addEventListener('click', () => this.optimizeRoute());
         document.getElementById('showRouteBtn').addEventListener('click', () => this.showRoute());
@@ -1205,6 +1206,36 @@ class TravelPlanner {
         this.markAsModified(); // 标记为已修改
     }
 
+    // 添加空白游玩点
+    addBlankPlace() {
+        const blankPlace = {
+            id: Date.now(),
+            name: '新游玩点',
+            address: '手动添加，无地理信息',
+            lng: null, // 没有经度
+            lat: null, // 没有纬度
+            customName: null, // 自定义名称
+            notes: null, // 备注信息
+            isPending: false, // 默认为激活状态
+            isBlank: true // 标记为空白地点
+        };
+
+        // 将空白地点添加到游玩列表的最上方（数组开头）
+        this.travelList.unshift(blankPlace);
+
+        // 只更新显示，不重新计算距离或绘制路线
+        this.updateTravelListWithoutRecalculation();
+        this.saveData();
+        this.markAsModified(); // 标记为已修改
+
+        this.showToast('已添加空白游玩点，请编辑名称和备注');
+
+        // 自动打开编辑模态框
+        setTimeout(() => {
+            this.editPlace(blankPlace.id.toString());
+        }, 100);
+    }
+
     // 更新游玩列表显示
     updateTravelList() {
         // 分离游玩中和待定的地点
@@ -1226,6 +1257,157 @@ class TravelPlanner {
         this.updateCityFilterButton();
     }
 
+    // 更新游玩列表显示（不触发距离重新计算）
+    updateTravelListWithoutRecalculation() {
+        // 分离游玩中和待定的地点
+        const activePlaces = this.travelList.filter(place => !place.isPending);
+        const pendingPlaces = this.travelList.filter(place => place.isPending);
+
+        // 更新游玩列表（保留现有距离信息）
+        this.updateActiveListWithoutRecalculation(activePlaces);
+
+        // 更新待定列表
+        this.updatePendingList(pendingPlaces);
+
+        this.setupDragAndDrop();
+
+        // 重新创建所有标记（只为激活的地点）
+        this.recreateMarkers();
+
+        // 刷新城市过滤按钮状态
+        this.updateCityFilterButton();
+    }
+
+    // 更新游玩列表（激活状态的地点，保留现有距离信息）
+    updateActiveListWithoutRecalculation(activePlaces) {
+        const listContainer = document.getElementById('travelList');
+
+        if (activePlaces.length === 0) {
+            listContainer.innerHTML = '<li style="text-align: center; color: #666; padding: 20px;">暂无游玩地点</li>';
+            return;
+        }
+
+        // 保存现有的距离信息
+        const existingDistances = {};
+        const existingDurations = {};
+
+        activePlaces.forEach(place => {
+            const distanceElement = document.getElementById(`distance-${place.id}`);
+            const durationElement = document.getElementById(`duration-${place.id}`);
+
+            if (distanceElement) {
+                existingDistances[place.id] = distanceElement.textContent;
+            }
+            if (durationElement) {
+                existingDurations[place.id] = durationElement.textContent;
+            }
+        });
+
+        let htmlContent = '';
+        let nonBlankIndex = 0; // 非空白地点的序号计数器
+
+        activePlaces.forEach((place, index) => {
+            // 如果不是第一个地点，先显示距离信息
+            if (index > 0) {
+                // 找到前一个非空白地点来计算距离
+                let prevNonBlankPlace = null;
+                for (let i = index - 1; i >= 0; i--) {
+                    if (activePlaces[i].lat && activePlaces[i].lng && !activePlaces[i].isBlank) {
+                        prevNonBlankPlace = activePlaces[i];
+                        break;
+                    }
+                }
+
+                const hasCoordinates = place.lat && place.lng && prevNonBlankPlace && prevNonBlankPlace.lat && prevNonBlankPlace.lng;
+
+                if (hasCoordinates && !place.isBlank) {
+                    // 显示到前一个非空白地点的距离
+                    const segmentKey = `${prevNonBlankPlace.id}-${place.id}`;
+                    const segmentConfig = this.routeSegments.get(segmentKey) || { mapProvider: 'amap' };
+
+                    // 确保新路线段使用高德地图作为默认
+                    if (!this.routeSegments.has(segmentKey)) {
+                        this.routeSegments.set(segmentKey, { mapProvider: 'amap' });
+                    }
+
+                    // 使用保存的距离信息或默认显示
+                    const distanceText = existingDistances[place.id] || '保持原值';
+                    const durationText = existingDurations[place.id] || '保持原值';
+
+                    htmlContent += `
+                        <li class="route-segment">
+                            <div class="route-connector">
+                                <div class="route-line"></div>
+                                <div class="route-info-card compact">
+                                    <div class="route-info">
+                                        <span class="distance-info">🚗 <span id="distance-${place.id}">${distanceText}</span></span>
+                                        <span class="duration-info">⏱️ <span id="duration-${place.id}">${durationText}</span></span>
+                                    </div>
+                                    <button class="navigate-btn compact" onclick="app.openNavigationRoute('${segmentKey}', ${index - 1}, ${index})" title="打开导航">
+                                        🧭
+                                    </button>
+                                </div>
+                            </div>
+                        </li>
+                    `;
+                } else if (place.isBlank || !hasCoordinates) {
+                    // 空白地点或无坐标地点显示简单的分隔线
+                    htmlContent += `
+                        <li class="route-segment">
+                            <div class="route-connector">
+                                <div class="route-line no-coordinates"></div>
+                                <div class="route-info-card compact disabled">
+                                    <div class="route-info">
+                                        <span class="distance-info">📍 ${place.isBlank ? '空白地点' : '无地理信息'}</span>
+                                    </div>
+                                </div>
+                            </div>
+                        </li>
+                    `;
+                }
+            }
+
+            // 然后显示地点信息
+            const displayName = place.customName || place.name;
+            const escapedCustomName = (place.customName || '').replace(/'/g, "\\'");
+            const escapedOriginalName = place.name.replace(/'/g, "\\'");
+
+            // 只为非空白地点分配序号
+            let displayOrder = '';
+            if (!place.isBlank) {
+                nonBlankIndex++;
+                displayOrder = nonBlankIndex;
+            } else {
+                displayOrder = '✏️'; // 空白地点显示编辑图标
+            }
+
+            htmlContent += `
+                <li class="travel-item ${place.isBlank ? 'blank-item' : ''}" draggable="true" data-id="${place.id}">
+                    <div class="travel-item-header">
+                        <div class="travel-item-left">
+                            <span class="drag-handle">⠿</span>
+                            <span class="travel-item-order">${displayOrder}</span>
+                            <span class="travel-item-name">${displayName}</span>
+                        </div>
+                    </div>
+                    <div class="travel-item-address">📮 ${place.address}</div>
+                    ${place.notes ? `<div class="travel-item-notes">${place.notes}</div>` : ''}
+                    <div class="travel-item-actions">
+                        <button class="activate-btn" onclick="app.togglePlaceStatus('${place.id}')" title="移至待定">🎯 游玩</button>
+                        ${place.lat && place.lng ? `<button class="action-btn locate-btn" onclick="app.locatePlace(${place.lng}, ${place.lat})" title="在地图上定位">📍</button>` : ''}
+                        <button class="action-btn edit-btn" onclick="app.editPlace('${place.id}')" title="编辑游玩点">✏️</button>
+                        <button class="action-btn copy-btn" onclick="app.copyPlaceName('${escapedCustomName || escapedOriginalName}')" title="复制名称">📋</button>
+                        <button class="action-btn copy-btn" onclick="app.copyPlaceAddress('${place.address.replace(/'/g, "\\'")}')" title="复制地址">📄</button>
+                        ${place.lat && place.lng ? `<button class="action-btn navigate-to-btn" onclick="app.navigateToPlace(${place.lng}, ${place.lat}, '${displayName.replace(/'/g, "\\'")}')" title="导航到此处">🧭</button>` : ''}
+                        <button class="action-btn" onclick="app.removePlaceFromList('${place.id}')" title="删除">✕</button>
+                    </div>
+                </li>
+            `;
+        });
+
+        listContainer.innerHTML = htmlContent;
+    }
+
     // 更新游玩列表（激活状态的地点）
     updateActiveList(activePlaces) {
         const listContainer = document.getElementById('travelList');
@@ -1236,34 +1418,63 @@ class TravelPlanner {
         }
 
         let htmlContent = '';
+        let nonBlankIndex = 0; // 非空白地点的序号计数器
 
         activePlaces.forEach((place, index) => {
             // 如果不是第一个地点，先显示距离信息
             if (index > 0) {
-                const segmentKey = `${activePlaces[index - 1].id}-${place.id}`;
-                const segmentConfig = this.routeSegments.get(segmentKey) || { mapProvider: 'amap' };
-
-                // 确保新路线段使用高德地图作为默认
-                if (!this.routeSegments.has(segmentKey)) {
-                    this.routeSegments.set(segmentKey, { mapProvider: 'amap' });
+                // 找到前一个非空白地点来计算距离
+                let prevNonBlankPlace = null;
+                for (let i = index - 1; i >= 0; i--) {
+                    if (activePlaces[i].lat && activePlaces[i].lng && !activePlaces[i].isBlank) {
+                        prevNonBlankPlace = activePlaces[i];
+                        break;
+                    }
                 }
 
-                htmlContent += `
-                    <li class="route-segment">
-                        <div class="route-connector">
-                            <div class="route-line"></div>
-                            <div class="route-info-card compact">
-                                <div class="route-info">
-                                    <span class="distance-info">🚗 <span id="distance-${place.id}">计算中...</span></span>
-                                    <span class="duration-info">⏱️ <span id="duration-${place.id}">计算中...</span></span>
+                const hasCoordinates = place.lat && place.lng && prevNonBlankPlace && prevNonBlankPlace.lat && prevNonBlankPlace.lng;
+
+                if (hasCoordinates && !place.isBlank) {
+                    // 显示到前一个非空白地点的距离
+                    const segmentKey = `${prevNonBlankPlace.id}-${place.id}`;
+                    const segmentConfig = this.routeSegments.get(segmentKey) || { mapProvider: 'amap' };
+
+                    // 确保新路线段使用高德地图作为默认
+                    if (!this.routeSegments.has(segmentKey)) {
+                        this.routeSegments.set(segmentKey, { mapProvider: 'amap' });
+                    }
+
+                    htmlContent += `
+                        <li class="route-segment">
+                            <div class="route-connector">
+                                <div class="route-line"></div>
+                                <div class="route-info-card compact">
+                                    <div class="route-info">
+                                        <span class="distance-info">🚗 <span id="distance-${place.id}">计算中...</span></span>
+                                        <span class="duration-info">⏱️ <span id="duration-${place.id}">计算中...</span></span>
+                                    </div>
+                                    <button class="navigate-btn compact" onclick="app.openNavigationRoute('${segmentKey}', ${index - 1}, ${index})" title="打开导航">
+                                        🧭
+                                    </button>
                                 </div>
-                                <button class="navigate-btn compact" onclick="app.openNavigationRoute('${segmentKey}', ${index - 1}, ${index})" title="打开导航">
-                                    🧭
-                                </button>
                             </div>
-                        </div>
-                    </li>
-                `;
+                        </li>
+                    `;
+                } else if (place.isBlank || !hasCoordinates) {
+                    // 空白地点或无坐标地点显示简单的分隔线
+                    htmlContent += `
+                        <li class="route-segment">
+                            <div class="route-connector">
+                                <div class="route-line no-coordinates"></div>
+                                <div class="route-info-card compact disabled">
+                                    <div class="route-info">
+                                        <span class="distance-info">📍 ${place.isBlank ? '空白地点' : '无地理信息'}</span>
+                                    </div>
+                                </div>
+                            </div>
+                        </li>
+                    `;
+                }
             }
 
             // 然后显示地点信息
@@ -1271,12 +1482,21 @@ class TravelPlanner {
             const escapedCustomName = (place.customName || '').replace(/'/g, "\\'");
             const escapedOriginalName = place.name.replace(/'/g, "\\'");
 
+            // 只为非空白地点分配序号
+            let displayOrder = '';
+            if (!place.isBlank) {
+                nonBlankIndex++;
+                displayOrder = nonBlankIndex;
+            } else {
+                displayOrder = '✏️'; // 空白地点显示编辑图标
+            }
+
             htmlContent += `
-                <li class="travel-item" draggable="true" data-id="${place.id}">
+                <li class="travel-item ${place.isBlank ? 'blank-item' : ''}" draggable="true" data-id="${place.id}">
                     <div class="travel-item-header">
                         <div class="travel-item-left">
                             <span class="drag-handle">⠿</span>
-                            <span class="travel-item-order">${index + 1}</span>
+                            <span class="travel-item-order">${displayOrder}</span>
                             <span class="travel-item-name">${displayName}</span>
                         </div>
                     </div>
@@ -1284,11 +1504,11 @@ class TravelPlanner {
                     ${place.notes ? `<div class="travel-item-notes">${place.notes}</div>` : ''}
                     <div class="travel-item-actions">
                         <button class="activate-btn" onclick="app.togglePlaceStatus('${place.id}')" title="移至待定">🎯 游玩</button>
-                        <button class="action-btn locate-btn" onclick="app.locatePlace(${place.lng}, ${place.lat})" title="在地图上定位">📍</button>
+                        ${place.lat && place.lng ? `<button class="action-btn locate-btn" onclick="app.locatePlace(${place.lng}, ${place.lat})" title="在地图上定位">📍</button>` : ''}
                         <button class="action-btn edit-btn" onclick="app.editPlace('${place.id}')" title="编辑游玩点">✏️</button>
                         <button class="action-btn copy-btn" onclick="app.copyPlaceName('${escapedCustomName || escapedOriginalName}')" title="复制名称">📋</button>
                         <button class="action-btn copy-btn" onclick="app.copyPlaceAddress('${place.address.replace(/'/g, "\\'")}')" title="复制地址">📄</button>
-                        <button class="action-btn navigate-to-btn" onclick="app.navigateToPlace(${place.lng}, ${place.lat}, '${displayName.replace(/'/g, "\\'")}')" title="导航到此处">🧭</button>
+                        ${place.lat && place.lng ? `<button class="action-btn navigate-to-btn" onclick="app.navigateToPlace(${place.lng}, ${place.lat}, '${displayName.replace(/'/g, "\\'")}')" title="导航到此处">🧭</button>` : ''}
                         <button class="action-btn" onclick="app.removePlaceFromList('${place.id}')" title="删除">✕</button>
                     </div>
                 </li>
@@ -1325,7 +1545,7 @@ class TravelPlanner {
                     ${place.notes ? `<div class="pending-item-notes">${place.notes}</div>` : ''}
                     <div class="pending-item-actions">
                         <button class="pending-btn" onclick="app.togglePlaceStatus('${place.id}')" title="加入游玩列表">⏳ 待定</button>
-                        <button class="action-btn locate-btn" onclick="app.locatePlace(${place.lng}, ${place.lat})" title="在地图上定位">📍</button>
+                        ${place.lat && place.lng ? `<button class="action-btn locate-btn" onclick="app.locatePlace(${place.lng}, ${place.lat})" title="在地图上定位">📍</button>` : ''}
                         <button class="action-btn edit-btn" onclick="app.editPlace('${place.id}')" title="编辑游玩点">✏️</button>
                         <button class="action-btn copy-btn" onclick="app.copyPlaceName('${escapedCustomName || escapedOriginalName}')" title="复制名称">📋</button>
                         <button class="action-btn copy-btn" onclick="app.copyPlaceAddress('${place.address.replace(/'/g, "\\'")}')" title="复制地址">📄</button>
@@ -1382,9 +1602,19 @@ class TravelPlanner {
             const [draggedItem] = this.travelList.splice(draggedIndex, 1);
             this.travelList.splice(targetIndex, 0, draggedItem);
 
-            this.updateTravelList();
-            this.calculateDistances();
-            this.drawRoute();
+            // 检查拖动的项目是否为空白地点
+            const isDraggingBlank = draggedItem.isBlank;
+
+            if (isDraggingBlank) {
+                // 如果是空白地点，使用不重新计算距离的方法
+                this.updateTravelListWithoutRecalculation();
+            } else {
+                // 如果是普通地点，正常更新并重新计算距离
+                this.updateTravelList();
+                this.calculateDistances();
+                this.drawRoute();
+            }
+
             this.saveData();
             this.markAsModified(); // 标记为已修改
         }
@@ -1596,69 +1826,128 @@ class TravelPlanner {
     calculateRealDistances() {
         const activePlaces = this.travelList.filter(place => !place.isPending);
 
+        // 只处理有坐标的非空白地点
+        const nonBlankPlaces = activePlaces.filter(place => place.lat && place.lng && !place.isBlank);
+
         let totalDistanceKm = 0;
         let totalDurationMin = 0;
         let completedCalculations = 0;
-        const totalCalculations = activePlaces.length - 1;
+        let totalCalculations = 0;
 
-        for (let i = 1; i < activePlaces.length; i++) {
-            const prev = activePlaces[i - 1];
-            const curr = activePlaces[i];
+        // 为每个地点寻找其前一个非空白地点，计算距离
+        for (let i = 0; i < activePlaces.length; i++) {
+            const currentPlace = activePlaces[i];
 
-            this.distanceMatrixService.getDistanceMatrix({
-                origins: [{ lat: prev.lat, lng: prev.lng }],
-                destinations: [{ lat: curr.lat, lng: curr.lng }],
-                travelMode: google.maps.TravelMode.DRIVING,
-                unitSystem: google.maps.UnitSystem.METRIC,
-                avoidHighways: false,
-                avoidTolls: false
-            }, (response, status) => {
-                completedCalculations++;
+            // 跳过空白地点或无坐标地点
+            if (!currentPlace.lat || !currentPlace.lng || currentPlace.isBlank) {
+                // 为空白地点或无坐标地点更新显示
+                const distanceElement = document.getElementById(`distance-${currentPlace.id}`);
+                const durationElement = document.getElementById(`duration-${currentPlace.id}`);
 
-                if (status === 'OK' && response.rows[0].elements[0].status === 'OK') {
-                    const element = response.rows[0].elements[0];
-                    const distance = element.distance.text;
-                    const duration = element.duration.text;
-
-                    // 提取数值进行累计
-                    const distanceValue = element.distance.value / 1000; // 转换为公里
-                    const durationValue = element.duration.value / 60; // 转换为分钟
-
-                    totalDistanceKm += distanceValue;
-                    totalDurationMin += durationValue;
-
-                    // 更新界面显示
-                    const distanceElement = document.getElementById(`distance-${curr.id}`);
-                    const durationElement = document.getElementById(`duration-${curr.id}`);
-
-                    if (distanceElement) {
-                        distanceElement.textContent = distance;
-                    }
-                    if (durationElement) {
-                        durationElement.textContent = duration;
-                    }
-                } else {
-                    // 如果API调用失败，使用直线距离
-                    const straightDistance = this.calculateStraightDistance(prev.lat, prev.lng, curr.lat, curr.lng);
-                    totalDistanceKm += straightDistance;
-                    totalDurationMin += (straightDistance / 50) * 60; // 假设50km/h
-
-                    const distanceElement = document.getElementById(`distance-${curr.id}`);
-                    const durationElement = document.getElementById(`duration-${curr.id}`);
-
-                    if (distanceElement) {
-                        distanceElement.textContent = `${straightDistance.toFixed(1)} 公里 (直线)`;
-                    }
-                    if (durationElement) {
-                        durationElement.textContent = `约${(straightDistance / 50 * 60).toFixed(0)} 分钟`;
-                    }
+                if (distanceElement) {
+                    distanceElement.textContent = currentPlace.isBlank ? '空白地点' : '无地理信息';
                 }
-
-                // 当所有计算完成时更新总计
-                if (completedCalculations === totalCalculations) {
-                    this.updateDistanceSummary(totalDistanceKm, totalDurationMin / 60);
+                if (durationElement) {
+                    durationElement.textContent = '-';
                 }
-            });
+                continue;
+            }
+
+            // 寻找前一个非空白地点
+            let prevNonBlankPlace = null;
+            for (let j = i - 1; j >= 0; j--) {
+                if (activePlaces[j].lat && activePlaces[j].lng && !activePlaces[j].isBlank) {
+                    prevNonBlankPlace = activePlaces[j];
+                    break;
+                }
+            }
+
+            // 如果找到了前一个非空白地点，计算距离
+            if (prevNonBlankPlace) {
+                totalCalculations++;
+            }
+        }
+
+        if (totalCalculations === 0) {
+            this.updateDistanceSummary(0, 0);
+            return;
+        }
+
+        // 执行距离计算
+        for (let i = 0; i < activePlaces.length; i++) {
+            const currentPlace = activePlaces[i];
+
+            // 跳过空白地点或无坐标地点
+            if (!currentPlace.lat || !currentPlace.lng || currentPlace.isBlank) {
+                continue;
+            }
+
+            // 寻找前一个非空白地点
+            let prevNonBlankPlace = null;
+            for (let j = i - 1; j >= 0; j--) {
+                if (activePlaces[j].lat && activePlaces[j].lng && !activePlaces[j].isBlank) {
+                    prevNonBlankPlace = activePlaces[j];
+                    break;
+                }
+            }
+
+            // 如果找到了前一个非空白地点，计算距离
+            if (prevNonBlankPlace) {
+                this.distanceMatrixService.getDistanceMatrix({
+                    origins: [{ lat: prevNonBlankPlace.lat, lng: prevNonBlankPlace.lng }],
+                    destinations: [{ lat: currentPlace.lat, lng: currentPlace.lng }],
+                    travelMode: google.maps.TravelMode.DRIVING,
+                    unitSystem: google.maps.UnitSystem.METRIC,
+                    avoidHighways: false,
+                    avoidTolls: false
+                }, (response, status) => {
+                    completedCalculations++;
+
+                    if (status === 'OK' && response.rows[0].elements[0].status === 'OK') {
+                        const element = response.rows[0].elements[0];
+                        const distance = element.distance.text;
+                        const duration = element.duration.text;
+
+                        // 提取数值进行累计
+                        const distanceValue = element.distance.value / 1000; // 转换为公里
+                        const durationValue = element.duration.value / 60; // 转换为分钟
+
+                        totalDistanceKm += distanceValue;
+                        totalDurationMin += durationValue;
+
+                        // 更新界面显示
+                        const distanceElement = document.getElementById(`distance-${currentPlace.id}`);
+                        const durationElement = document.getElementById(`duration-${currentPlace.id}`);
+
+                        if (distanceElement) {
+                            distanceElement.textContent = distance;
+                        }
+                        if (durationElement) {
+                            durationElement.textContent = duration;
+                        }
+                    } else {
+                        // 如果API调用失败，使用直线距离
+                        const straightDistance = this.calculateStraightDistance(prevNonBlankPlace.lat, prevNonBlankPlace.lng, currentPlace.lat, currentPlace.lng);
+                        totalDistanceKm += straightDistance;
+                        totalDurationMin += (straightDistance / 50) * 60; // 假设50km/h
+
+                        const distanceElement = document.getElementById(`distance-${currentPlace.id}`);
+                        const durationElement = document.getElementById(`duration-${currentPlace.id}`);
+
+                        if (distanceElement) {
+                            distanceElement.textContent = `${straightDistance.toFixed(1)} 公里 (直线)`;
+                        }
+                        if (durationElement) {
+                            durationElement.textContent = `约${(straightDistance / 50 * 60).toFixed(0)} 分钟`;
+                        }
+                    }
+
+                    // 当所有计算完成时更新总计
+                    if (completedCalculations === totalCalculations) {
+                        this.updateDistanceSummary(totalDistanceKm, totalDurationMin / 60);
+                    }
+                });
+            }
         }
     }
 
@@ -1735,9 +2024,20 @@ class TravelPlanner {
             return;
         }
 
-        // 获取游玩点在激活列表中的索引（用于显示编号）
+        // 如果没有坐标信息，不创建标记
+        if (!place.lat || !place.lng) {
+            return;
+        }
+
+        // 如果是空白地点，不创建标记
+        if (place.isBlank) {
+            return;
+        }
+
+        // 获取非空白游玩点在激活列表中的序号
         const activePlaces = this.travelList.filter(p => !p.isPending);
-        const index = activePlaces.findIndex(p => p.id === place.id);
+        const nonBlankActivePlaces = activePlaces.filter(p => !p.isBlank && p.lat && p.lng);
+        const index = nonBlankActivePlaces.findIndex(p => p.id === place.id);
         const number = index + 1;
 
         // 使用自定义名称（如果有的话）
@@ -1946,8 +2246,8 @@ class TravelPlanner {
 
     // 绘制路线
     drawRoute() {
-        // 只处理激活状态的地点
-        const activePlaces = this.travelList.filter(place => !place.isPending);
+        // 只处理激活状态且非空白的地点
+        const activePlaces = this.travelList.filter(place => !place.isPending && !place.isBlank && place.lat && place.lng);
 
         if (!this.isMapLoaded || activePlaces.length < 2) {
             // 如果只有一个地点或没有地点，清除路线
@@ -2015,97 +2315,54 @@ class TravelPlanner {
         }
     }
 
-    // 绘制简单路径（备用方案）
+    // 绘制简单路径（多彩线条）
     drawSimplePath() {
-        // 只处理激活状态的地点
-        const activePlaces = this.travelList.filter(place => !place.isPending);
+        // 只处理激活状态且非空白的地点
+        const activePlaces = this.travelList.filter(place => !place.isPending && !place.isBlank && place.lat && place.lng);
 
-        if (activePlaces.length < 2) return;
-
-        if (this.polyline) {
-            this.polyline.setMap(null);
+        if (!this.isMapLoaded || activePlaces.length < 2) {
+            return;
         }
 
-        // 定义多种颜色用于区分不同路线段
-        const routeColors = [
-            '#667eea', // 蓝紫色
-            '#ff6b6b', // 红色
-            '#4ecdc4', // 青绿色
-            '#45b7d1', // 蓝色
-            '#96ceb4', // 薄荷绿
-            '#feca57', // 黄色
-            '#ff9ff3', // 粉色
-            '#54a0ff', // 亮蓝色
-            '#5f27cd', // 紫色
-            '#00d2d3', // 青色
-            '#ff9f43', // 橙色
-            '#10ac84'  // 绿色
-        ];
-
-        // 如果只有两个点，使用单一路线
-        if (activePlaces.length === 2) {
-            const path = activePlaces.map(place => ({ lat: place.lat, lng: place.lng }));
-
-            this.polyline = new google.maps.Polyline({
-                path: path,
-                geodesic: true,
-                strokeColor: routeColors[0],
-                strokeOpacity: 0.8,
-                strokeWeight: 5,
-                icons: [{
-                    icon: {
-                        path: google.maps.SymbolPath.FORWARD_CLOSED_ARROW,
-                        scale: 7,
-                        strokeColor: routeColors[0],
-                        strokeWeight: 2,
-                        fillColor: routeColors[0],
-                        fillOpacity: 1
-                    },
-                    offset: '100%',
-                    repeat: '200px'
-                }]
-            });
-            this.polyline.setMap(this.map);
-        } else {
-            // 多个点时，为每个路线段使用不同颜色
-            this.polylines = this.polylines || [];
-
-            // 清除之前的路线
+        // 清除现有的多彩路线段
+        if (this.polylines) {
             this.polylines.forEach(polyline => polyline.setMap(null));
             this.polylines = [];
+        }
 
-            for (let i = 0; i < activePlaces.length - 1; i++) {
-                const segmentPath = [
-                    { lat: activePlaces[i].lat, lng: activePlaces[i].lng },
-                    { lat: activePlaces[i + 1].lat, lng: activePlaces[i + 1].lng }
-                ];
+        // 定义多种颜色用于不同路线段
+        const colors = [
+            '#e74c3c',  // 红色
+            '#3498db',  // 蓝色  
+            '#2ecc71',  // 绿色
+            '#f39c12',  // 橙色
+            '#9b59b6',  // 紫色
+            '#1abc9c',  // 青色
+            '#e67e22',  // 深橙色
+            '#34495e',  // 深蓝灰色
+            '#f1c40f',  // 黄色
+            '#e91e63'   // 粉红色
+        ];
 
-                const colorIndex = i % routeColors.length;
-                const segmentColor = routeColors[colorIndex];
+        // 创建路径点
+        const path = activePlaces.map(place => ({ lat: place.lat, lng: place.lng }));
 
-                const polyline = new google.maps.Polyline({
-                    path: segmentPath,
-                    geodesic: true,
-                    strokeColor: segmentColor,
-                    strokeOpacity: 0.8,
-                    strokeWeight: 5,
-                    icons: [{
-                        icon: {
-                            path: google.maps.SymbolPath.FORWARD_CLOSED_ARROW,
-                            scale: 7,
-                            strokeColor: segmentColor,
-                            strokeWeight: 2,
-                            fillColor: segmentColor,
-                            fillOpacity: 1
-                        },
-                        offset: '100%',
-                        repeat: '150px'
-                    }]
-                });
+        // 为每个路段创建不同颜色的polyline
+        for (let i = 0; i < path.length - 1; i++) {
+            const segmentPath = [path[i], path[i + 1]];
+            const color = colors[i % colors.length];
 
-                polyline.setMap(this.map);
-                this.polylines.push(polyline);
-            }
+            const polyline = new google.maps.Polyline({
+                path: segmentPath,
+                geodesic: true,
+                strokeColor: color,
+                strokeOpacity: 0.8,
+                strokeWeight: 4,
+                zIndex: 100 + i
+            });
+
+            polyline.setMap(this.map);
+            this.polylines.push(polyline);
         }
 
         // 调整地图视野以包含所有激活点，但保持合理的缩放级别
@@ -2892,23 +3149,42 @@ class TravelPlanner {
     // 优化路线（简单的贪心算法）
     optimizeRoute() {
         const activePlaces = this.travelList.filter(place => !place.isPending);
+        const nonBlankActivePlaces = activePlaces.filter(place => !place.isBlank && place.lat && place.lng);
+        const blankPlaces = activePlaces.filter(place => place.isBlank);
         const pendingPlaces = this.travelList.filter(place => place.isPending);
 
-        if (activePlaces.length < 3) {
-            alert('至少需要3个激活状态的地点才能优化路线');
+        if (nonBlankActivePlaces.length < 3) {
+            alert('至少需要3个非空白的激活状态地点才能优化路线');
             return;
         }
 
-        if (confirm('优化路线将重新排列游玩顺序（不影响待定列表），是否继续？')) {
-            const optimized = this.greedyTSP(activePlaces);
-            // 重新组合：优化后的激活地点 + 待定地点
-            this.travelList = [...optimized, ...pendingPlaces];
+        if (confirm('优化路线将重新排列非空白游玩点的顺序（不影响空白地点和待定列表），是否继续？')) {
+            const optimized = this.greedyTSP(nonBlankActivePlaces);
+
+            // 创建新的游玩列表：保持空白地点在原位置，优化后的非空白地点按新顺序排列
+            const newTravelList = [];
+            let optimizedIndex = 0;
+
+            // 遍历原列表，保持空白地点位置，替换非空白地点
+            activePlaces.forEach(place => {
+                if (place.isBlank) {
+                    // 空白地点保持原位置
+                    newTravelList.push(place);
+                } else if (place.lat && place.lng) {
+                    // 非空白地点使用优化后的顺序
+                    newTravelList.push(optimized[optimizedIndex]);
+                    optimizedIndex++;
+                }
+            });
+
+            // 重新组合：优化后的游玩地点 + 待定地点
+            this.travelList = [...newTravelList, ...pendingPlaces];
             this.updateTravelList();
             this.calculateDistances();
             this.drawRoute();
             this.saveData();
             this.markAsModified(); // 标记为已修改
-            alert('路线已优化！');
+            alert('路线已优化！空白地点位置保持不变。');
         }
     }
 
