@@ -3305,8 +3305,14 @@ class TravelPlanner {
                         isNewer: true
                     });
                 } else if (importModified.getTime() === existingModified.getTime()) {
-                    // 完全相同的版本，跳过不显示
-                    continue;
+                    // 完全相同的版本，显示冲突并推荐跳过
+                    conflicts.push({
+                        importScheme: importScheme,
+                        conflictType: 'version',
+                        existingScheme: uuidConflict,
+                        isNewer: false,
+                        isIdentical: true
+                    });
                 } else {
                     // 导入的版本较旧
                     conflicts.push({
@@ -3360,10 +3366,10 @@ class TravelPlanner {
                     <div class="conflict-header">
                         <h4>冲突 ${index + 1}: "${importScheme.name}"</h4>
                                                 <div class="conflict-type ${conflict.conflictType === 'version' ?
-                    (conflict.isNewer ? 'version-newer' : 'version-older') :
+                    (conflict.isIdentical ? 'version-identical' : (conflict.isNewer ? 'version-newer' : 'version-older')) :
                     'name-conflict'}">
                             ${conflict.conflictType === 'version' ?
-                    (conflict.isNewer ? '⬆️ 版本更新' : '⬇️ 版本较旧') :
+                    (conflict.isIdentical ? '🔄 完全相同' : (conflict.isNewer ? '⬆️ 版本更新' : '⬇️ 版本较旧')) :
                     '📝 同名方案'}
                         </div>
                     </div>
@@ -3392,18 +3398,29 @@ class TravelPlanner {
                         <h5>选择处理方式:</h5>
                         <div class="resolution-options">
                             ${conflict.conflictType === 'version' ? `
-                                <label>
-                                    <input type="radio" name="resolution_${index}" value="update" ${conflict.isNewer ? 'checked' : ''} />
-                                    <span>${conflict.isNewer ? '更新到新版本（推荐）' : '更新到此版本'}</span>
-                                </label>
-                                <label>
-                                    <input type="radio" name="resolution_${index}" value="keep" ${!conflict.isNewer ? 'checked' : ''} />
-                                    <span>保留现有版本</span>
-                                </label>
-                                <label>
-                                    <input type="radio" name="resolution_${index}" value="both" />
-                                    <span>同时保留两个版本</span>
-                                </label>
+                                ${conflict.isIdentical ? `
+                                    <label>
+                                        <input type="radio" name="resolution_${index}" value="skip" checked />
+                                        <span>跳过此方案（推荐）</span>
+                                    </label>
+                                    <label>
+                                        <input type="radio" name="resolution_${index}" value="both" />
+                                        <span>保留副本</span>
+                                    </label>
+                                ` : `
+                                    <label>
+                                        <input type="radio" name="resolution_${index}" value="update" ${conflict.isNewer ? 'checked' : ''} />
+                                        <span>${conflict.isNewer ? '更新到新版本（推荐）' : '更新到此版本'}</span>
+                                    </label>
+                                    <label>
+                                        <input type="radio" name="resolution_${index}" value="keep" ${!conflict.isNewer ? 'checked' : ''} />
+                                        <span>保留现有版本</span>
+                                    </label>
+                                    <label>
+                                        <input type="radio" name="resolution_${index}" value="both" />
+                                        <span>同时保留两个版本</span>
+                                    </label>
+                                `}
                             ` : `
                                 <label>
                                     <input type="radio" name="resolution_${index}" value="overwrite" />

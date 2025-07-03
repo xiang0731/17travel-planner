@@ -2759,6 +2759,11 @@ header p {
     color: white;
 }
 
+.conflict-type.version-identical {
+    background: linear-gradient(135deg, #00b894, #00a085);
+    color: white;
+}
+
 .conflict-type.name-conflict {
     background: linear-gradient(135deg, #ffeaa7, #fdcb6e);
     color: #d68000;
