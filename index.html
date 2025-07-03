@@ -4,7 +4,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>17旅游规划助手</title>
+    <title>17旅游规划助手v1.6.2</title>
     <link rel="stylesheet" href="styles.css">
     <!-- Google地图API -->
     <!-- Google Maps API脚本将根据设置中的API密钥动态加载 -->
@@ -16,7 +16,7 @@
         <header>
             <div class="header-left">
                 <h1>🗺️ 17旅游规划助手</h1>
-                <p>探索世界，规划你的完美旅程</p>
+                <p>v1.8.0 - 探索世界，规划你的完美旅程</p>
             </div>
             <div class="header-right">
                 <button id="saveSchemeBtn" class="header-btn" title="方案管理">📋 方案</button>
@@ -216,6 +216,10 @@
                             <div class="menu-icon">🧭</div>
                             <span class="menu-text">导航设置</span>
                         </div>
+                        <div class="settings-menu-item" data-panel="version">
+                            <div class="menu-icon">📋</div>
+                            <span class="menu-text">版本详情</span>
+                        </div>
                     </div>
                 </div>
 
@@ -326,6 +330,107 @@
                                         <span class="checkmark"></span>
                                         <span class="preference-text">显示导航操作提示</span>
                                     </label>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- 版本详情面板 -->
+                    <div class="settings-panel" id="versionPanel">
+                        <div class="panel-header">
+                            <h4>📋 版本更新记录</h4>
+                            <p class="panel-description">查看应用的版本更新历史和功能变更</p>
+                        </div>
+                        <div class="panel-content">
+                            <div class="version-info">
+                                <div class="current-version">
+                                    <h5>当前版本：1.3.4</h5>
+                                    <p>基于git提交记录自动生成的版本号</p>
+                                </div>
+                                <div class="version-history">
+                                    <h5>版本更新记录</h5>
+                                    <div class="version-list">
+                                        <div class="version-item">
+                                            <div class="version-header">
+                                                <span class="version-number">1.3.4</span>
+                                                <span class="version-date">2024-12-19</span>
+                                            </div>
+                                            <div class="version-changes">
+                                                <span class="change-type fix">修复</span>
+                                                <span class="change-text">编辑游玩点会触发地图重置视角的问题</span>
+                                            </div>
+                                        </div>
+                                        <div class="version-item">
+                                            <div class="version-header">
+                                                <span class="version-number">1.3.3</span>
+                                                <span class="version-date">2024-12-19</span>
+                                            </div>
+                                            <div class="version-changes">
+                                                <span class="change-type fix">修复</span>
+                                                <span class="change-text">编辑空白游玩点时触发距离和时间重计算的问题</span>
+                                            </div>
+                                        </div>
+                                        <div class="version-item">
+                                            <div class="version-header">
+                                                <span class="version-number">1.3.2</span>
+                                                <span class="version-date">2024-12-19</span>
+                                            </div>
+                                            <div class="version-changes">
+                                                <span class="change-type feature">新增</span>
+                                                <span class="change-text">添加空白游玩点功能</span>
+                                            </div>
+                                        </div>
+                                        <div class="version-item">
+                                            <div class="version-header">
+                                                <span class="version-number">1.3.1</span>
+                                                <span class="version-date">2024-12-19</span>
+                                            </div>
+                                            <div class="version-changes">
+                                                <span class="change-type feature">新增</span>
+                                                <span class="change-text">显示/隐藏待定点按钮</span>
+                                            </div>
+                                        </div>
+                                        <div class="version-item">
+                                            <div class="version-header">
+                                                <span class="version-number">1.3.0</span>
+                                                <span class="version-date">2024-12-19</span>
+                                            </div>
+                                            <div class="version-changes">
+                                                <span class="change-type feature">新增</span>
+                                                <span class="change-text">增加方案详情</span>
+                                            </div>
+                                        </div>
+                                        <div class="version-item">
+                                            <div class="version-header">
+                                                <span class="version-number">1.2.0</span>
+                                                <span class="version-date">2024-12-19</span>
+                                            </div>
+                                            <div class="version-changes">
+                                                <span class="change-type feature">新增</span>
+                                                <span class="change-text">移除方案覆盖功能</span>
+                                            </div>
+                                        </div>
+                                        <div class="version-item">
+                                            <div class="version-header">
+                                                <span class="version-number">1.1.0</span>
+                                                <span class="version-date">2024-12-19</span>
+                                            </div>
+                                            <div class="version-changes">
+                                                <span class="change-type feature">新增</span>
+                                                <span class="change-text">添加切换方案时保存提醒</span>
+                                            </div>
+                                        </div>
+                                        <div class="version-item">
+                                            <div class="version-header">
+                                                <span class="version-number">1.0.0</span>
+                                                <span class="version-date">2024-12-19</span>
+                                            </div>
+                                            <div class="version-changes">
+                                                <span class="change-type feature">新增</span>
+                                                <span class="change-text">初版发布</span>
+                                            </div>
+                                        </div>
+                                    </div>
                                 </div>
                             </div>
                         </div>

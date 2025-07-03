@@ -3234,3 +3234,138 @@ header p {
     color: #999;
     font-style: italic;
 }
+
+/* 版本详情样式 */
+.version-info {
+    padding: 20px 0;
+}
+
+.current-version {
+    background: linear-gradient(135deg, #667eea, #764ba2);
+    color: white;
+    padding: 20px;
+    border-radius: 12px;
+    margin-bottom: 30px;
+    text-align: center;
+}
+
+.current-version h5 {
+    margin: 0 0 10px 0;
+    font-size: 18px;
+    font-weight: 600;
+}
+
+.current-version p {
+    margin: 0;
+    opacity: 0.9;
+    font-size: 14px;
+}
+
+.version-history h5 {
+    margin: 0 0 20px 0;
+    font-size: 16px;
+    color: #2c3e50;
+    border-bottom: 2px solid #667eea;
+    padding-bottom: 8px;
+}
+
+.version-list {
+    max-height: 400px;
+    overflow-y: auto;
+}
+
+.version-item {
+    background: #f8f9fa;
+    border-radius: 10px;
+    padding: 16px;
+    margin-bottom: 12px;
+    border-left: 4px solid #667eea;
+    transition: all 0.3s ease;
+}
+
+.version-item:hover {
+    background: #e9ecef;
+    transform: translateX(5px);
+}
+
+.version-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 8px;
+}
+
+.version-number {
+    font-weight: 600;
+    color: #2c3e50;
+    font-size: 16px;
+}
+
+.version-date {
+    color: #7f8c8d;
+    font-size: 14px;
+}
+
+.version-changes {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.change-type {
+    padding: 4px 8px;
+    border-radius: 6px;
+    font-size: 12px;
+    font-weight: 600;
+    text-transform: uppercase;
+}
+
+.change-type.feature {
+    background: #27ae60;
+    color: white;
+}
+
+.change-type.fix {
+    background: #e74c3c;
+    color: white;
+}
+
+.change-type.optimize {
+    background: #f39c12;
+    color: white;
+}
+
+.change-text {
+    color: #2c3e50;
+    font-size: 14px;
+    line-height: 1.4;
+}
+
+/* 版本详情响应式设计 */
+@media (max-width: 768px) {
+    .version-list {
+        max-height: 300px;
+    }
+
+    .version-item {
+        padding: 12px;
+    }
+
+    .version-header {
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 4px;
+    }
+
+    .version-number {
+        font-size: 14px;
+    }
+
+    .version-date {
+        font-size: 12px;
+    }
+
+    .change-text {
+        font-size: 13px;
+    }
+}

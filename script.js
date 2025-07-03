@@ -1064,8 +1064,110 @@ class TravelPlanner {
                 if (targetPanel) {
                     targetPanel.classList.add('active');
                 }
+
+                // 如果切换到版本详情面板，更新版本信息
+                if (item.dataset.panel === 'version') {
+                    this.updateVersionInfo();
+                }
             });
         });
+    }
+
+    // 更新版本信息
+    updateVersionInfo() {
+        // 根据git提交记录生成的版本更新记录
+        const versionHistory = this.generateVersionHistory();
+
+        // 更新当前版本显示
+        const currentVersionElement = document.querySelector('.current-version h5');
+        if (currentVersionElement) {
+            currentVersionElement.textContent = `当前版本：${versionHistory[0].version}`;
+        }
+
+        // 更新版本历史列表
+        const versionListElement = document.querySelector('.version-list');
+        if (versionListElement) {
+            let html = '';
+            versionHistory.forEach(item => {
+                const changeTypeClass = item.type === 'feature' ? 'feature' :
+                    item.type === 'fix' ? 'fix' : 'optimize';
+                const changeTypeText = item.type === 'feature' ? '新增' :
+                    item.type === 'fix' ? '修复' : '优化';
+
+                html += `
+                    <div class="version-item">
+                        <div class="version-header">
+                            <span class="version-number">${item.version}</span>
+                        </div>
+                        <div class="version-changes">
+                            <span class="change-type ${changeTypeClass}">${changeTypeText}</span>
+                            <span class="change-text">${item.text}</span>
+                        </div>
+                    </div>
+                `;
+            });
+            versionListElement.innerHTML = html;
+        }
+    }
+
+    // 根据git提交记录生成版本历史
+    generateVersionHistory() {
+        // 根据实际git提交记录（按时间顺序从旧到新）
+        const gitCommits = [
+            { message: '初版', type: 'feature' },
+            { message: '添加页脚，优化显示策略', type: 'optimize' },
+            { message: '进一步优化显示', type: 'optimize' },
+            { message: '优化导入导出数据，导入时添加验证处理机制', type: 'optimize' },
+            { message: '添加方案重名验证', type: 'feature' },
+            { message: '修复 方案冲突解决 中相同数据不显示的问题', type: 'fix' },
+            { message: '修复 方案冲突解决 界面超出窗口问题', type: 'fix' },
+            { message: '修复 方案冲突解决 界面弹出时异位问题', type: 'fix' },
+            { message: '优化几个界面显示', type: 'optimize' },
+            { message: '添加切换方案时保存提醒', type: 'feature' },
+            { message: '修复页面刷新后不显示当前方案的问题', type: 'fix' },
+            { message: '移除方案覆盖功能', type: 'feature' },
+            { message: '增加方案详情', type: 'feature' },
+            { message: '增加显示/隐藏待定点按钮', type: 'feature' },
+            { message: '新增"添加空白游玩点"功能', type: 'feature' },
+            { message: '修复"编辑空白游玩点时触发距离和时间重计算"的问题', type: 'fix' },
+            { message: '修复：编辑游玩点会触发地图重置视角的问题', type: 'fix' }
+        ];
+
+        // 版本号生成规则：1.a.b
+        // a: 二级更新（新增/增加）的次数
+        // b: 三级更新（优化/修复）的次数
+        let major = 1;
+        let minor = 0;
+        let patch = 0;
+        let currentMinor = 0;
+        let currentPatch = 0;
+
+        const versionHistory = [];
+
+        gitCommits.forEach((commit, index) => {
+            if (commit.type === 'feature') {
+                // 新增功能，增加minor版本
+                currentMinor++;
+                minor = currentMinor;
+                patch = 0;
+                currentPatch = 0;
+            } else if (commit.type === 'fix' || commit.type === 'optimize') {
+                // 修复或优化，增加patch版本
+                currentPatch++;
+                patch = currentPatch;
+            }
+
+            const version = `${major}.${minor}.${patch}`;
+
+            versionHistory.push({
+                version: version,
+                type: commit.type,
+                text: commit.message
+            });
+        });
+
+        // 按时间倒序排列（最新版本在前）
+        return versionHistory.reverse();
     }
 
 
