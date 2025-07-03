@@ -1064,6 +1064,18 @@ header p {
     }
 }
 
+@keyframes largeModalShow {
+    from {
+        opacity: 0;
+        transform: translate(-50%, -50%) scale(0.95);
+    }
+
+    to {
+        opacity: 1;
+        transform: translate(-50%, -50%) scale(1);
+    }
+}
+
 .close {
     color: #aaa;
     float: right;
@@ -2694,7 +2706,7 @@ header p {
 
 /* 冲突解决模态框样式 */
 .large-modal {
-    position: absolute;
+    position: fixed;
     top: 50%;
     left: 50%;
     transform: translate(-50%, -50%);
@@ -2704,6 +2716,8 @@ header p {
     max-height: 85vh;
     display: flex;
     flex-direction: column;
+    z-index: 2001;
+    animation: largeModalShow 0.3s ease-out;
 }
 
 .conflict-resolution-content {
