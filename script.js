@@ -39,6 +39,7 @@ class TravelPlanner {
         // 应用设置 - 默认设置
         this.settings = {
             navigationApp: 'amap', // 默认使用高德地图
+            selectedMapApi: 'google', // 默认使用Google Maps作为地图显示API
             apiKeys: {
                 google: '', // Google Maps API密钥
                 gaode: '', // 高德地图API密钥
@@ -68,6 +69,7 @@ class TravelPlanner {
         this.idCounter = 0;
 
         // 首先加载已保存的设置，然后再初始化应用
+        console.log('🏗️ TravelPlanner构造函数被调用');
         this.initializeApp();
     }
 
@@ -189,14 +191,19 @@ class TravelPlanner {
 
     // 初始化应用程序
     initializeApp() {
+        console.log('🚀 开始初始化应用程序...');
+
         // 首先加载保存的设置
         this.loadSavedSettings();
+        console.log('📂 设置已加载');
 
         // 设置页面关闭时的提醒
         this.setupPageUnloadHandler();
+        console.log('🔔 页面关闭提醒已设置');
 
         // 然后检查并初始化地图
-        this.waitForGoogleMaps();
+        this.waitForMapAPI();
+        console.log('🗺️ 地图API检查完成');
     }
 
     // 加载已保存的设置
@@ -223,14 +230,20 @@ class TravelPlanner {
                         };
                     }
 
+                    // 确保地图API选择设置完整
+                    if (!this.settings.selectedMapApi) {
+                        this.settings.selectedMapApi = 'google';
+                    }
+
                     console.log('✅ 已加载保存的设置');
 
                     // 显示API密钥状态
-                    const googleApiKey = this.settings.apiKeys?.google;
-                    if (googleApiKey) {
-                        console.log('🔑 检测到已保存的Google Maps API密钥，将自动应用');
+                    const selectedMapApi = this.settings.selectedMapApi;
+                    const selectedApiKey = this.settings.apiKeys?.[selectedMapApi];
+                    if (selectedApiKey) {
+                        console.log(`🔑 检测到已保存的${selectedMapApi} API密钥，将自动应用`);
                     } else {
-                        console.log('⚠️ 未检测到Google Maps API密钥，将使用演示模式');
+                        console.log(`⚠️ 未检测到${selectedMapApi} API密钥，将使用演示模式`);
                     }
                 }
             }
@@ -239,25 +252,46 @@ class TravelPlanner {
         }
     }
 
-    // 等待Google Maps API加载
-    waitForGoogleMaps() {
-        if (typeof google !== 'undefined' && google.maps) {
+    // 等待地图API加载
+    waitForMapAPI() {
+        const selectedMapApi = this.settings.selectedMapApi;
+
+        // 检查选择的API是否已经加载
+        if (selectedMapApi === 'google' && typeof google !== 'undefined' && google.maps) {
+            this.init();
+        } else if (selectedMapApi === 'gaode' && typeof AMap !== 'undefined') {
+            this.init();
+        } else if (selectedMapApi === 'bing' && typeof Microsoft !== 'undefined') {
             this.init();
         } else {
-            // 尝试动态加载Google Maps API
-            this.tryLoadGoogleMapsAPI();
+            // 尝试动态加载选择的地图API
+            this.tryLoadMapAPI();
         }
     }
 
-    // 尝试动态加载Google Maps API
-    tryLoadGoogleMapsAPI() {
-        const googleApiKey = this.getApiKey('google');
+    // 尝试动态加载选择的地图API
+    tryLoadMapAPI() {
+        const selectedMapApi = this.settings.selectedMapApi;
+        const apiKey = this.getApiKey(selectedMapApi);
 
-        if (googleApiKey) {
-            console.log('🔑 检测到已保存的Google API密钥，自动加载Google Maps...');
-            this.loadGoogleMapsScript(googleApiKey);
+        console.log(`🔍 选择的地图API: ${selectedMapApi}`);
+        console.log(`🔑 API密钥状态: ${apiKey ? '已配置' : '未配置'}`);
+
+        if (selectedMapApi === 'google' && apiKey) {
+            console.log('🔑 使用Google Maps API作为地图显示服务...');
+            this.loadGoogleMapsScript(apiKey);
+        } else if (selectedMapApi === 'gaode' && apiKey) {
+            console.log('🔑 使用高德地图API作为地图显示服务...');
+            this.loadGaodeMapScript(apiKey);
+        } else if (selectedMapApi === 'bing' && apiKey) {
+            console.log('🔑 使用Bing Maps API作为地图显示服务（暂未实现）...');
+            // TODO: 实现Bing Maps API加载
+            setTimeout(() => {
+                this.initDemoMode();
+            }, 1000);
         } else {
-            console.log('⚠️ 未配置Google API密钥，使用演示模式');
+            console.log(`⚠️ 未配置${selectedMapApi}API密钥或选择了未支持的API，使用演示模式`);
+            console.log(`设置详情:`, this.settings);
             setTimeout(() => {
                 this.initDemoMode();
             }, 1000);
@@ -297,12 +331,96 @@ class TravelPlanner {
         document.head.appendChild(script);
     }
 
+    // 动态加载高德地图脚本
+    loadGaodeMapScript(apiKey) {
+        console.log(`🗺️ 开始加载高德地图API，密钥: ${apiKey.substring(0, 8)}...`);
+
+        // 检查是否已经存在高德地图脚本
+        const existingScript = document.querySelector('script[src*="webapi.amap.com"]');
+        if (existingScript) {
+            existingScript.remove();
+        }
+
+        // 创建新的脚本标签（只加载地图显示所需的基础组件）
+        const script = document.createElement('script');
+        script.src = `https://webapi.amap.com/maps?v=2.0&key=${apiKey}&plugin=AMap.Scale,AMap.ToolBar`;
+        script.async = true;
+        script.defer = true;
+
+        script.onload = () => {
+            console.log('✅ 高德地图API脚本加载成功');
+
+            // 等待AMap对象可用，然后初始化应用
+            const checkAMap = () => {
+                if (typeof AMap !== 'undefined') {
+                    console.log('🗺️ AMap对象已可用，初始化应用');
+
+                    // 移除API配置提示横幅
+                    const banner = document.getElementById('api-config-banner');
+                    if (banner) {
+                        document.body.removeChild(banner);
+                        document.body.style.paddingTop = '0';
+                    }
+
+                    if (!window.app || !window.app.settings) {
+                        window.app = new TravelPlanner();
+                    } else {
+                        // 如果应用已存在，直接初始化地图
+                        window.app.init();
+                    }
+                } else {
+                    console.log('⏳ 等待AMap对象...');
+                    setTimeout(checkAMap, 50);
+                }
+            };
+
+            setTimeout(checkAMap, 100);
+        };
+
+        const self = this;
+        script.onerror = () => {
+            console.error('❌ 高德地图API加载失败，可能是API密钥错误');
+            if (self.showToast) {
+                self.showToast('高德地图API加载失败，请检查API密钥配置');
+            }
+            self.initDemoMode();
+        };
+
+        document.head.appendChild(script);
+    }
+
     // 初始化应用
     init() {
+        console.log('🎯 开始主要初始化流程...');
+
         this.setupEventListeners();
-        this.initGoogleMap();
+        console.log('📝 事件监听器设置完成');
+
+        this.initMap(); // 使用通用的地图初始化方法
+        console.log('🗺️ 地图初始化完成');
+
         this.loadSavedData();
+        console.log('💾 数据加载完成');
+
         this.updatePageTitle(); // 更新页面标题
+        console.log('✅ 应用初始化完成！');
+    }
+
+    // 通用地图初始化方法（根据选择的API）
+    initMap() {
+        const selectedMapApi = this.settings.selectedMapApi;
+
+        if (selectedMapApi === 'google' && typeof google !== 'undefined') {
+            this.initGoogleMap();
+        } else if (selectedMapApi === 'gaode' && typeof AMap !== 'undefined') {
+            this.initAMap();
+        } else if (selectedMapApi === 'bing' && typeof Microsoft !== 'undefined') {
+            // TODO: 实现Bing Maps初始化
+            this.initDemoMap();
+        } else {
+            // 如果没有可用的API，显示演示模式
+            this.initDemoMap();
+        }
     }
 
     // 初始化演示模式
@@ -315,9 +433,10 @@ class TravelPlanner {
 
     // 显示API密钥配置提示
     showApiKeyConfigPrompt() {
-        const hasGoogleApiKey = this.getApiKey('google');
+        const selectedMapApi = this.settings.selectedMapApi;
+        const hasSelectedApiKey = this.getApiKey(selectedMapApi);
 
-        if (!hasGoogleApiKey) {
+        if (!hasSelectedApiKey) {
             // 添加API配置提示横幅
             const banner = document.createElement('div');
             banner.id = 'api-config-banner';
@@ -337,8 +456,16 @@ class TravelPlanner {
                 backdrop-filter: blur(10px);
             `;
 
+            // 获取API的中文名称
+            const apiNameMap = {
+                'google': 'Google Maps',
+                'gaode': '高德地图',
+                'bing': 'Bing Maps'
+            };
+            const apiDisplayName = apiNameMap[selectedMapApi] || selectedMapApi;
+
             banner.innerHTML = `
-                🔑 为了获得完整的地图功能，请在设置中配置您的API密钥
+                🔑 为了获得完整的地图功能，请在设置中配置您的${apiDisplayName} API密钥
                 <button id="openApiSettingsBtn" style="
                     margin-left: 15px;
                     padding: 6px 12px;
@@ -387,8 +514,16 @@ class TravelPlanner {
 
     // 设置事件监听器
     setupEventListeners() {
+        console.log('🔧 开始设置事件监听器...');
+
         // 搜索相关
-        document.getElementById('searchBtn').addEventListener('click', () => this.searchPlaces());
+        const searchBtn = document.getElementById('searchBtn');
+        if (searchBtn) {
+            searchBtn.addEventListener('click', () => this.searchPlaces());
+            console.log('✅ 搜索按钮事件监听器已设置');
+        } else {
+            console.error('❌ 找不到搜索按钮元素');
+        }
         document.getElementById('searchInput').addEventListener('keypress', (e) => {
             if (e.key === 'Enter') this.searchPlaces();
         });
@@ -628,9 +763,12 @@ class TravelPlanner {
                     };
                 }
 
+                // 计算初始地图中心和缩放级别
+                const mapConfig = this.calculateInitialMapConfig();
+
                 this.map = new google.maps.Map(document.getElementById('mapContainer'), {
-                    zoom: 10,
-                    center: { lat: 39.9042, lng: 116.4074 }, // 北京
+                    zoom: mapConfig.zoom,
+                    center: mapConfig.center,
                     mapTypeId: google.maps.MapTypeId.ROADMAP
                 });
 
@@ -652,6 +790,11 @@ class TravelPlanner {
 
                 this.isMapLoaded = true;
                 console.log('Google地图初始化成功');
+
+                // 延迟绘制路线，确保地图完全加载
+                setTimeout(() => {
+                    this.initializeMapContent();
+                }, 500);
             } else {
                 throw new Error('Google Maps API未加载');
             }
@@ -661,15 +804,170 @@ class TravelPlanner {
         }
     }
 
+    // 初始化高德地图
+    initAMap() {
+        try {
+            if (typeof AMap !== 'undefined') {
+                // 计算初始地图中心和缩放级别
+                const mapConfig = this.calculateInitialMapConfig();
+
+                // 转换为高德地图格式 [lng, lat]
+                const amapCenter = [mapConfig.center.lng, mapConfig.center.lat];
+
+                // 创建高德地图实例
+                this.map = new AMap.Map('mapContainer', {
+                    zoom: mapConfig.zoom,
+                    center: amapCenter,
+                    mapStyle: 'amap://styles/normal',
+                    resizeEnable: true
+                });
+
+                this.isMapLoaded = true;
+                console.log('高德地图初始化成功');
+
+                // 移除API配置提示横幅（如果存在）
+                const banner = document.getElementById('api-config-banner');
+                if (banner) {
+                    document.body.removeChild(banner);
+                    document.body.style.paddingTop = '0';
+                }
+
+                // 地图点击事件
+                this.map.on('click', (e) => {
+                    const lng = e.lnglat.lng;
+                    const lat = e.lnglat.lat;
+                    this.onMapClick(lng, lat);
+                });
+
+                // 创建一些基础的地图控件
+                this.map.addControl(new AMap.Scale());
+                this.map.addControl(new AMap.ToolBar());
+
+                // 延迟绘制路线，确保地图完全加载
+                setTimeout(() => {
+                    this.initializeMapContent();
+                }, 500);
+
+                this.showToast('✅ 高德地图加载成功！');
+
+            } else {
+                throw new Error('高德地图API未加载');
+            }
+        } catch (error) {
+            console.error('高德地图初始化失败:', error);
+            this.initDemoMap();
+        }
+    }
+
+    // 计算初始地图配置（中心点和缩放级别）
+    calculateInitialMapConfig() {
+        // 获取当前有效地点（非待定且有坐标）
+        const activePlaces = this.travelList.filter(place =>
+            !place.isPending && place.lat && place.lng && !place.isBlank
+        );
+
+        if (activePlaces.length === 0) {
+            // 没有地点时，显示中国的中心位置
+            console.log('📍 没有游玩地点，使用默认位置（中国中心）');
+            return {
+                center: { lat: 35.0, lng: 105.0 },  // Google Maps格式
+                zoom: 4
+            };
+        } else if (activePlaces.length === 1) {
+            // 只有一个地点时，以该地点为中心
+            console.log(`📍 单个游玩地点，居中显示: ${activePlaces[0].name}`);
+            return {
+                center: { lat: activePlaces[0].lat, lng: activePlaces[0].lng },
+                zoom: 12
+            };
+        } else {
+            // 多个地点时，计算边界并居中
+            const bounds = this.calculateMapBounds();
+            console.log(`📍 ${activePlaces.length}个游玩地点，计算最佳视野`);
+            return bounds || {
+                center: { lat: 35.0, lng: 105.0 },
+                zoom: 4
+            };
+        }
+    }
+
+    // 初始化地图内容（标记和路线）
+    initializeMapContent() {
+        if (!this.isMapLoaded) return;
+
+        console.log('🎯 初始化地图内容：添加标记和绘制路线');
+
+        // 添加所有标记
+        const activePlaces = this.travelList.filter(place => !place.isPending);
+        activePlaces.forEach(place => this.addMarker(place));
+
+        // 绘制路线
+        if (activePlaces.length >= 2) {
+            this.drawRoute();
+        }
+
+        // 适配地图视野（如果有多个地点）
+        if (activePlaces.length > 1) {
+            setTimeout(() => {
+                this.fitMapToPlaces(activePlaces);
+            }, 800);
+        }
+
+        console.log('✅ 地图内容初始化完成');
+    }
+
+    // 更新地图到当前方案区域
+    updateMapToCurrentScheme() {
+        if (!this.isMapLoaded) return;
+
+        const activePlaces = this.travelList.filter(place => !place.isPending && place.lat && place.lng && !place.isBlank);
+
+        if (activePlaces.length === 0) {
+            console.log('📍 没有有效地点，保持当前地图视野');
+            return;
+        }
+
+        console.log(`🗺️ 更新地图到当前方案，包含${activePlaces.length}个地点`);
+
+        // 清除现有标记和路线
+        this.clearMarkers();
+
+        // 重新添加标记
+        activePlaces.forEach(place => this.addMarker(place));
+
+        // 绘制路线
+        if (activePlaces.length >= 2) {
+            this.drawRoute();
+        }
+
+        // 适配地图视野
+        setTimeout(() => {
+            this.fitMapToPlaces(activePlaces);
+        }, 300);
+
+        // 更新待定点显示
+        this.updateTogglePendingButton();
+
+        console.log('✅ 地图已更新到当前方案区域');
+    }
+
     // 演示版地图（当没有API时）
     initDemoMap() {
+        const selectedMapApi = this.settings.selectedMapApi || 'google';
+        const apiNameMap = {
+            'google': 'Google Maps',
+            'gaode': '高德地图',
+            'bing': 'Bing Maps'
+        };
+        const selectedApiName = apiNameMap[selectedMapApi] || selectedMapApi;
+
         const mapContainer = document.getElementById('mapContainer');
         mapContainer.innerHTML = `
             <div style="height: 100%; display: flex; align-items: center; justify-content: center; background: #f0f0f0; color: #666; flex-direction: column;">
                 <h3>🗺️ 演示模式</h3>
-                <p>请在HTML中配置Google地图API密钥以启用完整功能</p>
+                <p>请在设置中配置${selectedApiName}API密钥以启用完整功能</p>
                 <p>目前可以使用搜索和列表功能</p>
-                <button onclick="app.showApiHelp()" style="margin-top: 15px; padding: 10px 20px; background: #667eea; color: white; border: none; border-radius: 5px; cursor: pointer;">获取API密钥帮助</button>
+                <button onclick="app.showSettingsModal()" style="margin-top: 15px; padding: 10px 20px; background: #667eea; color: white; border: none; border-radius: 5px; cursor: pointer;">打开设置配置API</button>
             </div>
         `;
         this.isMapLoaded = false;
@@ -762,9 +1060,29 @@ class TravelPlanner {
         const resultsContainer = document.getElementById('searchResults');
         resultsContainer.innerHTML = '<div style="padding: 10px; text-align: center; color: #666;">搜索中...</div>';
 
-        if (this.placesService) {
+        const selectedMapApi = this.settings.selectedMapApi;
+        console.log(`🔍 开始搜索 - API: ${selectedMapApi}, 关键字: ${keyword}`);
+        console.log('🔍 当前设置:', this.settings);
+
+        // 详细的API状态检查
+        console.log('🔍 API状态检查:');
+        console.log('  - selectedMapApi:', selectedMapApi);
+        console.log('  - typeof AMap:', typeof AMap);
+        console.log('  - this.placesService:', !!this.placesService);
+        console.log('  - 高德API密钥:', this.getApiKey('gaode') ? '已配置' : '未配置');
+
+        if (selectedMapApi === 'google' && this.placesService) {
+            console.log('✅ 使用Google Places API搜索');
             this.searchWithGoogle(keyword);
+        } else if (selectedMapApi === 'gaode') {
+            console.log('🗺️ 使用高德Web服务API搜索');
+            this.searchWithGaode(keyword);
+        } else if (selectedMapApi === 'bing') {
+            console.log('🌐 使用Bing搜索（暂未实现）');
+            this.searchWithBing(keyword);
         } else {
+            console.warn('⚠️ 当前地图API不支持搜索或未加载，使用演示模式');
+            console.warn('  原因：selectedMapApi =', selectedMapApi, ', this.placesService =', !!this.placesService);
             this.searchDemo(keyword);
         }
     }
@@ -791,8 +1109,256 @@ class TravelPlanner {
         });
     }
 
+    // 使用高德地图Web服务API搜索
+    searchWithGaode(keyword) {
+        console.log('🗺️ 使用高德地图Web服务API搜索...', keyword);
+
+        // 检查API密钥
+        const apiKey = this.getApiKey('gaode');
+        console.log('🔑 高德API密钥状态:', apiKey ? `已配置 (${apiKey.substring(0, 8)}...)` : '❌ 未配置');
+
+        if (!apiKey) {
+            console.error('❌ 高德地图API密钥未配置，无法进行搜索');
+            this.displaySearchResults([]);
+            return;
+        }
+
+        // 使用Web服务API进行搜索
+        this.searchWithGaodeWebAPI(keyword, apiKey);
+    }
+
+    // 使用高德Web服务API进行搜索
+    async searchWithGaodeWebAPI(keyword, apiKey) {
+        try {
+            console.log('🌐 调用高德Web服务API...');
+
+            // 构建请求URL
+            const searchUrl = 'https://restapi.amap.com/v3/place/text';
+            const params = new URLSearchParams({
+                key: apiKey,
+                keywords: keyword,
+                offset: '10',  // 返回结果数量
+                page: '1',     // 页码
+                extensions: 'all'  // 返回详细信息
+            });
+
+            const requestUrl = `${searchUrl}?${params.toString()}`;
+            console.log('🔗 请求URL:', requestUrl);
+
+            // 发送请求
+            const response = await fetch(requestUrl);
+            console.log('📡 HTTP响应状态:', response.status, response.statusText);
+
+            if (!response.ok) {
+                throw new Error(`HTTP错误: ${response.status} ${response.statusText}`);
+            }
+
+            const data = await response.json();
+            console.log('📦 API响应数据:', data);
+
+            // 处理响应
+            if (data.status === '1') {
+                console.log('✅ 搜索成功');
+
+                if (data.pois && data.pois.length > 0) {
+                    console.log('✅ 找到POI数据，数量:', data.pois.length);
+
+                    const places = data.pois.map((poi, index) => {
+                        console.log(`🔍 处理POI ${index + 1}:`, poi);
+
+                        // 构建完整地址
+                        let address = '';
+                        if (poi.pname) address += poi.pname;
+                        if (poi.cityname) address += poi.cityname;
+                        if (poi.adname) address += poi.adname;
+                        if (poi.address) address += poi.address;
+
+                        // 解析坐标（Web服务API返回的是字符串格式："lng,lat"）
+                        const [lng, lat] = poi.location.split(',').map(Number);
+
+                        const place = {
+                            name: poi.name || '未知地点',
+                            address: address || '地址未知',
+                            lng: lng || 0,
+                            lat: lat || 0
+                        };
+
+                        console.log(`🔍 转换后的地点 ${index + 1}:`, place);
+                        return place;
+                    }).filter(place => place.lng && place.lat);
+
+                    console.log('✅ 最终结果数量:', places.length);
+                    this.displaySearchResults(places);
+                } else {
+                    console.log('📭 搜索成功但无结果');
+                    this.displaySearchResults([]);
+                }
+            } else {
+                console.error('❌ API返回错误:', data.info || '未知错误');
+                console.error('❌ 错误代码:', data.infocode);
+                this.displaySearchResults([]);
+            }
+
+        } catch (error) {
+            console.error('❌ 调用高德Web服务API时出错:', error);
+            console.error('❌ 错误堆栈:', error.stack);
+
+            // 检查是否是跨域问题
+            if (error.message.includes('CORS') || error.message.includes('network')) {
+                console.warn('⚠️ 可能遇到跨域问题，尝试使用JSONP方式...');
+                this.searchWithGaodeJSONP(keyword, apiKey);
+            } else {
+                this.displaySearchResults([]);
+            }
+        }
+    }
+
+    // 使用JSONP方式调用高德API（解决跨域问题）
+    searchWithGaodeJSONP(keyword, apiKey) {
+        console.log('🔄 使用JSONP方式调用高德API...');
+
+        const callbackName = `gaodeCallback_${Date.now()}`;
+
+        // 创建全局回调函数
+        window[callbackName] = (data) => {
+            console.log('📦 JSONP响应数据:', data);
+
+            try {
+                if (data.status === '1') {
+                    if (data.pois && data.pois.length > 0) {
+                        const places = data.pois.map(poi => {
+                            const [lng, lat] = poi.location.split(',').map(Number);
+                            return {
+                                name: poi.name || '未知地点',
+                                address: (poi.pname || '') + (poi.cityname || '') + (poi.adname || '') + (poi.address || '') || '地址未知',
+                                lng: lng || 0,
+                                lat: lat || 0
+                            };
+                        }).filter(place => place.lng && place.lat);
+
+                        console.log('✅ JSONP搜索成功，结果数量:', places.length);
+                        this.displaySearchResults(places);
+                    } else {
+                        console.log('📭 JSONP搜索成功但无结果');
+                        this.displaySearchResults([]);
+                    }
+                } else {
+                    console.error('❌ JSONP API返回错误:', data.info);
+                    this.displaySearchResults([]);
+                }
+            } catch (error) {
+                console.error('❌ 处理JSONP响应时出错:', error);
+                this.displaySearchResults([]);
+            } finally {
+                // 清理
+                delete window[callbackName];
+                document.head.removeChild(script);
+            }
+        };
+
+        // 创建script标签
+        const script = document.createElement('script');
+        const params = new URLSearchParams({
+            key: apiKey,
+            keywords: keyword,
+            offset: '10',
+            page: '1',
+            extensions: 'all',
+            callback: callbackName
+        });
+
+        script.src = `https://restapi.amap.com/v3/place/text?${params.toString()}`;
+        script.onerror = () => {
+            console.error('❌ JSONP请求失败');
+            delete window[callbackName];
+            document.head.removeChild(script);
+            this.displaySearchResults([]);
+        };
+
+        document.head.appendChild(script);
+    }
+
+    // 测试高德地图Web服务API是否正常工作
+    async testGaodeAPI() {
+        console.log('🧪 === 测试高德地图Web服务API ===');
+
+        const apiKey = this.getApiKey('gaode');
+        if (!apiKey) {
+            console.error('❌ 高德API密钥未配置');
+            return false;
+        }
+
+        console.log('🔑 API密钥:', apiKey.substring(0, 8) + '...');
+
+        try {
+            const testUrl = `https://restapi.amap.com/v3/place/text?key=${apiKey}&keywords=北京&offset=1`;
+            console.log('🔗 测试URL:', testUrl);
+
+            const response = await fetch(testUrl);
+            console.log('📡 HTTP状态:', response.status);
+
+            const data = await response.json();
+            console.log('📦 测试响应:', data);
+
+            if (data.status === '1') {
+                console.log('✅ 高德Web服务API测试成功！');
+                return true;
+            } else {
+                console.error('❌ API返回错误:', data.info);
+                return false;
+            }
+        } catch (error) {
+            console.error('❌ 测试API时出错:', error);
+
+            // 如果fetch失败，尝试JSONP测试
+            console.log('🔄 尝试JSONP测试...');
+            return this.testGaodeAPIWithJSONP(apiKey);
+        }
+    }
+
+    // 使用JSONP测试高德API
+    testGaodeAPIWithJSONP(apiKey) {
+        return new Promise((resolve) => {
+            const callbackName = `testCallback_${Date.now()}`;
+
+            window[callbackName] = (data) => {
+                console.log('📦 JSONP测试响应:', data);
+
+                if (data.status === '1') {
+                    console.log('✅ 高德Web服务API (JSONP) 测试成功！');
+                    resolve(true);
+                } else {
+                    console.error('❌ JSONP API返回错误:', data.info);
+                    resolve(false);
+                }
+
+                // 清理
+                delete window[callbackName];
+                document.head.removeChild(script);
+            };
+
+            const script = document.createElement('script');
+            script.src = `https://restapi.amap.com/v3/place/text?key=${apiKey}&keywords=北京&offset=1&callback=${callbackName}`;
+            script.onerror = () => {
+                console.error('❌ JSONP测试失败');
+                delete window[callbackName];
+                document.head.removeChild(script);
+                resolve(false);
+            };
+
+            document.head.appendChild(script);
+        });
+    }
+
+    // 使用Bing地图搜索（暂未实现）
+    searchWithBing(keyword) {
+        console.log('🌐 Bing地图搜索暂未实现，使用演示模式');
+        this.searchDemo(keyword);
+    }
+
     // 演示搜索功能
     searchDemo(keyword) {
+        console.log('🎭 使用演示搜索模式');
         // 模拟真实的搜索结果
         const demoResults = [
             { name: `${keyword}博物馆`, address: '北京市东城区王府井大街1号', lng: 116.397428, lat: 39.90923 },
@@ -914,6 +1480,12 @@ class TravelPlanner {
 
     // 加载设置到界面
     loadSettingsToUI() {
+        // 加载地图API选择
+        const mapApiRadioButton = document.querySelector(`input[name="selectedMapApi"][value="${this.settings.selectedMapApi}"]`);
+        if (mapApiRadioButton) {
+            mapApiRadioButton.checked = true;
+        }
+
         // 加载导航应用选择
         const radioButton = document.querySelector(`input[name="navigationApp"][value="${this.settings.navigationApp}"]`);
         if (radioButton) {
@@ -947,8 +1519,15 @@ class TravelPlanner {
 
     // 保存设置
     saveSettings() {
-        // 在更新设置之前，先记录当前的API密钥
+        // 在更新设置之前，先记录当前的API密钥和地图API选择
         const currentGoogleApiKey = this.getApiKey('google');
+        const currentSelectedMapApi = this.settings.selectedMapApi;
+
+        // 保存地图API选择设置
+        const selectedMapApi = document.querySelector('input[name="selectedMapApi"]:checked');
+        if (selectedMapApi) {
+            this.settings.selectedMapApi = selectedMapApi.value;
+        }
 
         // 保存导航应用设置
         const selectedApp = document.querySelector('input[name="navigationApp"]:checked');
@@ -987,37 +1566,51 @@ class TravelPlanner {
         // 保存到本地存储
         this.saveData();
 
-        // 检查Google API密钥变化
+        // 检查地图API相关变化
         const newGoogleApiKey = this.settings.apiKeys.google;
+        const newSelectedMapApi = this.settings.selectedMapApi;
 
-        if (newGoogleApiKey && newGoogleApiKey !== currentGoogleApiKey) {
-            // API密钥有变化或新增
-            if (typeof google === 'undefined') {
-                // 之前没有Google Maps，现在要加载
-                this.showToast('设置已保存，正在加载Google Maps...');
-                setTimeout(() => {
-                    // 移除API配置提示横幅
-                    const banner = document.getElementById('api-config-banner');
-                    if (banner) {
-                        document.body.removeChild(banner);
-                        document.body.style.paddingTop = '0';
-                    }
-                    // 加载Google Maps
-                    this.loadGoogleMapsScript(newGoogleApiKey);
-                }, 1000);
+        // 检查是否需要重新加载地图
+        const needsReload = (
+            // API密钥变化
+            newGoogleApiKey !== currentGoogleApiKey ||
+            // 地图API选择变化
+            newSelectedMapApi !== currentSelectedMapApi ||
+            // 选择了Google但之前没有加载Google Maps
+            (newSelectedMapApi === 'google' && newGoogleApiKey && typeof google === 'undefined') ||
+            // 移除了API密钥但还在使用该API
+            (!newGoogleApiKey && newSelectedMapApi === 'google' && typeof google !== 'undefined')
+        );
+
+        if (needsReload) {
+            if (newSelectedMapApi === 'google' && newGoogleApiKey) {
+                if (typeof google === 'undefined') {
+                    // 需要加载Google Maps
+                    this.showToast('设置已保存，正在加载Google Maps...');
+                    setTimeout(() => {
+                        // 移除API配置提示横幅
+                        const banner = document.getElementById('api-config-banner');
+                        if (banner) {
+                            document.body.removeChild(banner);
+                            document.body.style.paddingTop = '0';
+                        }
+                        // 加载Google Maps
+                        this.loadGoogleMapsScript(newGoogleApiKey);
+                    }, 1000);
+                } else {
+                    // 已经有Google Maps，但API密钥或设置变了，需要重新加载
+                    this.showToast('设置已保存，配置已更新，页面将刷新以应用新配置...');
+                    setTimeout(() => {
+                        window.location.reload();
+                    }, 2000);
+                }
             } else {
-                // 已经有Google Maps，但API密钥变了，需要重新加载
-                this.showToast('设置已保存，API密钥已更新，页面将刷新以应用新配置...');
+                // 选择了其他API或移除了配置，需要刷新页面
+                this.showToast('设置已保存，页面将刷新以应用更改...');
                 setTimeout(() => {
                     window.location.reload();
                 }, 2000);
             }
-        } else if (!newGoogleApiKey && typeof google !== 'undefined') {
-            // 移除了API密钥，需要刷新到演示模式
-            this.showToast('设置已保存，页面将刷新以应用更改...');
-            setTimeout(() => {
-                window.location.reload();
-            }, 2000);
         } else {
             this.showToast('设置已保存');
         }
@@ -1027,20 +1620,33 @@ class TravelPlanner {
 
     // 获取API密钥
     getApiKey(provider) {
+        console.log(`🔍 获取API密钥 - 提供商: ${provider}`);
+        console.log(`📋 当前设置:`, this.settings);
+
         if (!this.settings.apiKeys) {
+            console.log('❌ 没有apiKeys配置');
             return null;
         }
 
+        console.log(`🔑 apiKeys配置:`, this.settings.apiKeys);
+
+        let apiKey = null;
         switch (provider) {
             case 'google':
-                return this.settings.apiKeys.google || null;
+                apiKey = this.settings.apiKeys.google || null;
+                break;
             case 'gaode':
-                return this.settings.apiKeys.gaode || null;
+                apiKey = this.settings.apiKeys.gaode || null;
+                break;
             case 'bing':
-                return this.settings.apiKeys.bing || null;
+                apiKey = this.settings.apiKeys.bing || null;
+                break;
             default:
-                return null;
+                apiKey = null;
         }
+
+        console.log(`🔑 ${provider} API密钥: ${apiKey ? '已配置' : '未配置'}`);
+        return apiKey;
     }
 
     // 设置菜单切换功能
@@ -1724,14 +2330,29 @@ class TravelPlanner {
 
     // 定位地点
     locatePlace(lng, lat) {
+        console.log(`🎯 定位到地点: ${lng.toFixed(6)}, ${lat.toFixed(6)}`);
+
         if (this.isMapLoaded) {
-            this.map.setCenter({ lat: lat, lng: lng });
-            this.map.setZoom(16);
+            const selectedMapApi = this.settings.selectedMapApi;
+
+            if (selectedMapApi === 'google' && typeof google !== 'undefined') {
+                this.map.setCenter({ lat: lat, lng: lng });
+                this.map.setZoom(16);
+            } else if (selectedMapApi === 'gaode' && typeof AMap !== 'undefined') {
+                this.map.setCenter([lng, lat]); // 高德地图使用 [经度, 纬度] 格式
+                this.map.setZoom(16);
+            } else {
+                console.warn('地图API未加载，无法在地图上定位');
+                this.showToast(`地点坐标: ${lng.toFixed(6)}, ${lat.toFixed(6)}`);
+                return;
+            }
 
             // 显示恢复总地图按钮
             this.showReturnToOverviewButton();
+
+            console.log('✅ 地点定位完成');
         } else {
-            alert(`地点坐标: ${lng.toFixed(6)}, ${lat.toFixed(6)}`);
+            this.showToast(`地点坐标: ${lng.toFixed(6)}, ${lat.toFixed(6)}`);
         }
     }
 
@@ -1924,8 +2545,23 @@ class TravelPlanner {
         this.calculateRealDistances();
     }
 
-    // 使用Google Distance Matrix API计算真实距离
+    // 计算真实距离（根据选择的地图API）
     calculateRealDistances() {
+        const selectedMapApi = this.settings.selectedMapApi;
+        console.log(`📏 使用${selectedMapApi} API计算距离`);
+
+        if (selectedMapApi === 'google' && this.distanceMatrixService) {
+            this.calculateRealDistancesWithGoogle();
+        } else if (selectedMapApi === 'gaode') {
+            this.calculateRealDistancesWithGaode();
+        } else {
+            console.warn('⚠️ 当前地图API不支持距离计算，使用直线距离');
+            this.calculateStraightLineDistances();
+        }
+    }
+
+    // 使用Google Distance Matrix API计算真实距离
+    calculateRealDistancesWithGoogle() {
         const activePlaces = this.travelList.filter(place => !place.isPending);
 
         // 只处理有坐标的非空白地点
@@ -2053,6 +2689,184 @@ class TravelPlanner {
         }
     }
 
+    // 使用高德地图Web服务API计算真实距离
+    async calculateRealDistancesWithGaode() {
+        const activePlaces = this.travelList.filter(place => !place.isPending);
+        const apiKey = this.getApiKey('gaode');
+
+        if (!apiKey) {
+            console.error('❌ 高德API密钥未配置，使用直线距离');
+            this.calculateStraightLineDistances();
+            return;
+        }
+
+        let totalDistanceKm = 0;
+        let totalDurationMin = 0;
+        let completedCalculations = 0;
+        let totalCalculations = 0;
+
+        // 统计需要计算的路段数
+        for (let i = 0; i < activePlaces.length; i++) {
+            const currentPlace = activePlaces[i];
+
+            if (!currentPlace.lat || !currentPlace.lng || currentPlace.isBlank) {
+                const distanceElement = document.getElementById(`distance-${currentPlace.id}`);
+                const durationElement = document.getElementById(`duration-${currentPlace.id}`);
+
+                if (distanceElement) {
+                    distanceElement.textContent = currentPlace.isBlank ? '空白地点' : '无地理信息';
+                }
+                if (durationElement) {
+                    durationElement.textContent = '-';
+                }
+                continue;
+            }
+
+            let prevNonBlankPlace = null;
+            for (let j = i - 1; j >= 0; j--) {
+                if (activePlaces[j].lat && activePlaces[j].lng && !activePlaces[j].isBlank) {
+                    prevNonBlankPlace = activePlaces[j];
+                    break;
+                }
+            }
+
+            if (prevNonBlankPlace) {
+                totalCalculations++;
+            }
+        }
+
+        if (totalCalculations === 0) {
+            this.updateDistanceSummary(0, 0);
+            return;
+        }
+
+        // 计算每个路段的距离
+        for (let i = 0; i < activePlaces.length; i++) {
+            const currentPlace = activePlaces[i];
+
+            if (!currentPlace.lat || !currentPlace.lng || currentPlace.isBlank) {
+                continue;
+            }
+
+            let prevNonBlankPlace = null;
+            for (let j = i - 1; j >= 0; j--) {
+                if (activePlaces[j].lat && activePlaces[j].lng && !activePlaces[j].isBlank) {
+                    prevNonBlankPlace = activePlaces[j];
+                    break;
+                }
+            }
+
+            if (prevNonBlankPlace) {
+                try {
+                    const result = await this.calculateGaodeDistance(prevNonBlankPlace, currentPlace, apiKey);
+                    completedCalculations++;
+
+                    if (result.success) {
+                        totalDistanceKm += result.distance;
+                        totalDurationMin += result.duration;
+
+                        const distanceElement = document.getElementById(`distance-${currentPlace.id}`);
+                        const durationElement = document.getElementById(`duration-${currentPlace.id}`);
+
+                        if (distanceElement) {
+                            distanceElement.textContent = `${result.distance.toFixed(1)} 公里`;
+                        }
+                        if (durationElement) {
+                            durationElement.textContent = `${Math.round(result.duration)} 分钟`;
+                        }
+                    } else {
+                        // API失败，使用直线距离
+                        const straightDistance = this.calculateStraightDistance(
+                            prevNonBlankPlace.lat, prevNonBlankPlace.lng,
+                            currentPlace.lat, currentPlace.lng
+                        );
+                        totalDistanceKm += straightDistance;
+                        totalDurationMin += (straightDistance / 50) * 60;
+
+                        const distanceElement = document.getElementById(`distance-${currentPlace.id}`);
+                        const durationElement = document.getElementById(`duration-${currentPlace.id}`);
+
+                        if (distanceElement) {
+                            distanceElement.textContent = `${straightDistance.toFixed(1)} 公里 (直线)`;
+                        }
+                        if (durationElement) {
+                            durationElement.textContent = `约${Math.round(straightDistance / 50 * 60)} 分钟`;
+                        }
+                    }
+
+                    // 当所有计算完成时更新总计
+                    if (completedCalculations === totalCalculations) {
+                        this.updateDistanceSummary(totalDistanceKm, totalDurationMin / 60);
+                    }
+                } catch (error) {
+                    console.error('❌ 高德距离计算出错:', error);
+                    completedCalculations++;
+
+                    // 使用直线距离作为备用
+                    const straightDistance = this.calculateStraightDistance(
+                        prevNonBlankPlace.lat, prevNonBlankPlace.lng,
+                        currentPlace.lat, currentPlace.lng
+                    );
+                    totalDistanceKm += straightDistance;
+                    totalDurationMin += (straightDistance / 50) * 60;
+
+                    const distanceElement = document.getElementById(`distance-${currentPlace.id}`);
+                    const durationElement = document.getElementById(`duration-${currentPlace.id}`);
+
+                    if (distanceElement) {
+                        distanceElement.textContent = `${straightDistance.toFixed(1)} 公里 (直线)`;
+                    }
+                    if (durationElement) {
+                        durationElement.textContent = `约${Math.round(straightDistance / 50 * 60)} 分钟`;
+                    }
+
+                    if (completedCalculations === totalCalculations) {
+                        this.updateDistanceSummary(totalDistanceKm, totalDurationMin / 60);
+                    }
+                }
+            }
+        }
+    }
+
+    // 使用高德API计算两点间距离
+    async calculateGaodeDistance(fromPlace, toPlace, apiKey) {
+        try {
+            const url = 'https://restapi.amap.com/v3/direction/driving';
+            const params = new URLSearchParams({
+                key: apiKey,
+                origin: `${fromPlace.lng},${fromPlace.lat}`,
+                destination: `${toPlace.lng},${toPlace.lat}`,
+                extensions: 'base'
+            });
+
+            const response = await fetch(`${url}?${params.toString()}`);
+
+            if (!response.ok) {
+                throw new Error(`HTTP错误: ${response.status}`);
+            }
+
+            const data = await response.json();
+
+            if (data.status === '1' && data.route && data.route.paths && data.route.paths.length > 0) {
+                const path = data.route.paths[0];
+                const distance = parseFloat(path.distance) / 1000; // 转换为公里
+                const duration = parseFloat(path.duration) / 60;   // 转换为分钟
+
+                return {
+                    success: true,
+                    distance: distance,
+                    duration: duration
+                };
+            } else {
+                console.warn('⚠️ 高德路径规划API返回错误:', data.info);
+                return { success: false };
+            }
+        } catch (error) {
+            console.error('❌ 调用高德路径规划API失败:', error);
+            return { success: false };
+        }
+    }
+
     // 计算直线距离（备用方案）
     calculateStraightLineDistances() {
         let totalDistance = 0;
@@ -2145,7 +2959,45 @@ class TravelPlanner {
         // 使用自定义名称（如果有的话）
         const displayName = place.customName || place.name;
 
-        const marker = new google.maps.Marker({
+        const selectedMapApi = this.settings.selectedMapApi;
+        let marker = null;
+        let placeLabel = null;
+
+        if (selectedMapApi === 'google' && typeof google !== 'undefined') {
+            // Google Maps 标记
+            marker = this.createGoogleMarker(place, number, displayName, index);
+
+            // 创建自定义标签显示地点名称
+            if (PlaceLabel && this.isMapLoaded) {
+                placeLabel = new PlaceLabel(
+                    { lat: place.lat, lng: place.lng },
+                    `${number}. ${displayName}`,
+                    this.map
+                );
+
+                // 如果当前设置为隐藏名称，则隐藏标签
+                if (!this.showPlaceNames) {
+                    placeLabel.hide();
+                }
+
+                this.placeLabels.push({ id: place.id, label: placeLabel });
+            }
+        } else if (selectedMapApi === 'gaode' && typeof AMap !== 'undefined') {
+            // 高德地图标记
+            marker = this.createGaodeMarker(place, number, displayName, index);
+        } else {
+            console.warn('⚠️ 无法创建标记：地图API未加载');
+            return;
+        }
+
+        if (marker) {
+            this.markers.push({ id: place.id, marker: marker, place: place });
+        }
+    }
+
+    // 创建Google Maps标记
+    createGoogleMarker(place, number, displayName, index) {
+        return new google.maps.Marker({
             position: { lat: place.lat, lng: place.lng },
             map: this.map,
             title: `${number}. ${displayName}`,
@@ -2165,44 +3017,153 @@ class TravelPlanner {
                 scaledSize: new google.maps.Size(40, 50),
                 anchor: new google.maps.Point(20, 50)
             },
-            zIndex: 1000 + index // 确保标记在路线之上
+            zIndex: 1000 + index
+        });
+    }
+
+    // 创建高德地图标记
+    createGaodeMarker(place, number, displayName, index) {
+        // 使用SVG创建标记，与Google Maps保持一致的视觉效果
+        const markerSvg = `
+            <svg width="40" height="50" viewBox="0 0 40 50" xmlns="http://www.w3.org/2000/svg">
+                <!-- 阴影 -->
+                <ellipse cx="20" cy="47" rx="8" ry="3" fill="rgba(0,0,0,0.3)"/>
+                <!-- 主要标记 -->
+                <path d="M20 3C13.4 3 8 8.4 8 15C8 24.75 20 47 20 47C20 47 32 24.75 32 15C32 8.4 26.6 3 20 3Z" fill="#e74c3c" stroke="#ffffff" stroke-width="2"/>
+                <!-- 内圆 -->
+                <circle cx="20" cy="15" r="6" fill="#ffffff"/>
+                <!-- 编号文字 -->
+                <text x="20" y="19" text-anchor="middle" font-family="Arial, sans-serif" font-size="12" font-weight="bold" fill="#e74c3c">${number}</text>
+            </svg>
+        `;
+
+        const marker = new AMap.Marker({
+            position: [place.lng, place.lat], // 高德地图使用 [经度, 纬度] 格式
+            title: `${number}. ${displayName}`,
+            content: `
+                <div style="
+                    position: relative;
+                    width: 40px;
+                    height: 50px;
+                    cursor: pointer;
+                ">
+                    ${markerSvg}
+                </div>
+            `,
+            anchor: 'bottom-center',
+            zIndex: 1000 + index
         });
 
-        // 创建自定义标签显示地点名称（仅在Google Maps API可用时）
-        let placeLabel = null;
-        if (PlaceLabel && this.isMapLoaded) {
-            placeLabel = new PlaceLabel(
-                { lat: place.lat, lng: place.lng },
-                `${number}. ${displayName}`,
-                this.map
-            );
+        // 添加点击事件
+        marker.on('click', () => {
+            this.showPlaceModal({
+                name: place.name,
+                address: place.address,
+                lng: place.lng,
+                lat: place.lat,
+                customName: place.customName,
+                notes: place.notes,
+                isPending: false
+            });
+        });
 
-            // 如果当前设置为隐藏名称，则隐藏标签
-            if (!this.showPlaceNames) {
-                placeLabel.hide();
-            }
-
-            this.placeLabels.push({ id: place.id, label: placeLabel });
+        // 创建高德地图标签
+        if (this.showPlaceNames) {
+            this.createGaodeLabel(place, number, displayName);
         }
 
-        this.markers.push({ id: place.id, marker: marker, place: place });
+        this.map.add(marker);
+        return marker;
+    }
+
+    // 创建高德地图标签
+    createGaodeLabel(place, number, displayName) {
+        const labelText = `${number}. ${displayName}`;
+
+        const labelMarker = new AMap.Marker({
+            position: [place.lng, place.lat],
+            content: `
+                <div style="
+                    position: absolute;
+                    background: linear-gradient(135deg, rgba(255,255,255,0.95) 0%, rgba(248,250,252,0.97) 100%);
+                    border: 1px solid rgba(255,255,255,0.9);
+                    border-radius: 8px;
+                    padding: 6px 10px;
+                    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+                    font-size: 12px;
+                    font-weight: 600;
+                    color: #2c3e50;
+                    white-space: nowrap;
+                    box-shadow: 0 4px 12px rgba(0,0,0,0.15), 0 2px 4px rgba(0,0,0,0.1);
+                    backdrop-filter: blur(8px);
+                    text-shadow: 0 1px 2px rgba(255,255,255,0.8);
+                    min-width: 60px;
+                    text-align: center;
+                    cursor: default;
+                    user-select: none;
+                    z-index: 1000;
+                    top: -75px;
+                    left: 50%;
+                    transform: translateX(-50%);
+                    pointer-events: none;
+                ">
+                    <span style="
+                        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                        -webkit-background-clip: text;
+                        -webkit-text-fill-color: transparent;
+                        background-clip: text;
+                        font-weight: 800;
+                        margin-right: 4px;
+                    ">${number}.</span><span>${displayName}</span>
+                </div>
+            `,
+            anchor: 'bottom-center',
+            zIndex: 1100,
+            clickable: false
+        });
+
+        this.map.add(labelMarker);
+
+        // 存储标签信息
+        this.placeLabels.push({
+            id: place.id,
+            label: labelMarker,
+            visible: this.showPlaceNames
+        });
+
+        return labelMarker;
     }
 
     // 删除标记
     removeMarker(id) {
         if (!this.isMapLoaded) return;
 
+        const selectedMapApi = this.settings.selectedMapApi;
         const markerIndex = this.markers.findIndex(m => m.id.toString() === id);
+
         if (markerIndex !== -1) {
-            this.markers[markerIndex].marker.setMap(null);
+            const markerObj = this.markers[markerIndex];
+
+            if (selectedMapApi === 'google' && typeof google !== 'undefined') {
+                // Google Maps 标记删除
+                markerObj.marker.setMap(null);
+            } else if (selectedMapApi === 'gaode' && typeof AMap !== 'undefined') {
+                // 高德地图标记删除
+                this.map.remove(markerObj.marker);
+            }
+
             this.markers.splice(markerIndex, 1);
         }
 
-        // 同时删除对应的标签
+        // 同时删除对应的标签（支持Google Maps和高德地图）
         const labelIndex = this.placeLabels.findIndex(l => l.id.toString() === id);
         if (labelIndex !== -1) {
             if (this.placeLabels[labelIndex].label) {
-                this.placeLabels[labelIndex].label.setMap(null);
+                if (selectedMapApi === 'google' && typeof google !== 'undefined') {
+                    this.placeLabels[labelIndex].label.setMap(null);
+                } else if (selectedMapApi === 'gaode' && typeof AMap !== 'undefined') {
+                    this.map.remove(this.placeLabels[labelIndex].label);
+                }
             }
             this.placeLabels.splice(labelIndex, 1);
         }
@@ -2212,19 +3173,35 @@ class TravelPlanner {
     clearMarkers() {
         if (!this.isMapLoaded) return;
 
-        this.markers.forEach(m => m.marker.setMap(null));
+        const selectedMapApi = this.settings.selectedMapApi;
+
+        // 清除游玩点标记
+        this.markers.forEach(m => {
+            if (selectedMapApi === 'google' && typeof google !== 'undefined') {
+                m.marker.setMap(null);
+            } else if (selectedMapApi === 'gaode' && typeof AMap !== 'undefined') {
+                this.map.remove(m.marker);
+            }
+        });
         this.markers = [];
 
         // 清除所有标签
         this.placeLabels.forEach(l => {
-            if (l.label) l.label.setMap(null);
+            if (l.label) {
+                if (selectedMapApi === 'google' && typeof google !== 'undefined') {
+                    l.label.setMap(null);
+                } else if (selectedMapApi === 'gaode' && typeof AMap !== 'undefined') {
+                    this.map.remove(l.label);
+                }
+            }
         });
         this.placeLabels = [];
 
         // 清除待定点标记
         this.clearPendingMarkers();
 
-        if (this.directionsRenderer) {
+        // 清除路线
+        if (selectedMapApi === 'google' && this.directionsRenderer) {
             this.directionsRenderer.setDirections({ routes: [] });
         }
 
@@ -2271,12 +3248,27 @@ class TravelPlanner {
     clearMarkersOnly() {
         if (!this.isMapLoaded) return;
 
-        this.markers.forEach(m => m.marker.setMap(null));
+        const selectedMapApi = this.settings.selectedMapApi;
+
+        // 清除游玩点标记
+        this.markers.forEach(m => {
+            if (selectedMapApi === 'google' && typeof google !== 'undefined') {
+                m.marker.setMap(null);
+            } else if (selectedMapApi === 'gaode' && typeof AMap !== 'undefined') {
+                this.map.remove(m.marker);
+            }
+        });
         this.markers = [];
 
         // 清除所有标签
         this.placeLabels.forEach(l => {
-            if (l.label) l.label.setMap(null);
+            if (l.label) {
+                if (selectedMapApi === 'google' && typeof google !== 'undefined') {
+                    l.label.setMap(null);
+                } else if (selectedMapApi === 'gaode' && typeof AMap !== 'undefined') {
+                    this.map.remove(l.label);
+                }
+            }
         });
         this.placeLabels = [];
 
@@ -2284,16 +3276,23 @@ class TravelPlanner {
         this.clearPendingMarkers();
 
         // 清除路线
-        if (this.directionsRenderer) {
-            this.directionsRenderer.setDirections({ routes: [] });
-        }
-        if (this.polyline) {
-            this.polyline.setMap(null);
-            this.polyline = null;
-        }
-        if (this.polylines) {
-            this.polylines.forEach(polyline => polyline.setMap(null));
-            this.polylines = [];
+        if (selectedMapApi === 'google') {
+            if (this.directionsRenderer) {
+                this.directionsRenderer.setDirections({ routes: [] });
+            }
+            if (this.polyline) {
+                this.polyline.setMap(null);
+                this.polyline = null;
+            }
+            if (this.polylines) {
+                this.polylines.forEach(polyline => polyline.setMap(null));
+                this.polylines = [];
+            }
+        } else if (selectedMapApi === 'gaode') {
+            if (this.polylines) {
+                this.polylines.forEach(polyline => this.map.remove(polyline));
+                this.polylines = [];
+            }
         }
     }
 
@@ -2321,12 +3320,16 @@ class TravelPlanner {
         }
     }
 
-    // 显示路线功能
+    // 显示路线功能（优化版）
     showRoute() {
-        if (this.travelList.length < 2) {
-            this.showToast('至少需要2个地点才能显示路线');
+        const activePlaces = this.travelList.filter(place => !place.isPending && !place.isBlank && place.lat && place.lng);
+
+        if (activePlaces.length < 2) {
+            this.showToast('至少需要2个有效地点才能显示路线');
             return;
         }
+
+        console.log(`🛣️ 显示路线：${activePlaces.length}个地点`);
 
         // 确保标记已显示
         if (this.markersCleared) {
@@ -2337,13 +3340,35 @@ class TravelPlanner {
             this.markersCleared = false;
         }
 
-        // 重新绘制路线
+        // 立即重新绘制路线（快速显示）
         this.drawRoute();
 
-        // 适配地图视野以显示所有地点
-        this.fitMapToPlaces(this.travelList);
+        // 立即适配地图视野显示所有地点
+        setTimeout(() => {
+            this.fitMapToPlaces(activePlaces);
+        }, 100);
 
-        this.showToast('已显示完整路线');
+        // 刷新所有标记确保正确显示
+        setTimeout(() => {
+            this.refreshAllMarkers();
+        }, 200);
+
+        this.showToast(`✅ 已显示${activePlaces.length}个地点的完整路线`);
+    }
+
+    // 刷新所有标记
+    refreshAllMarkers() {
+        if (!this.isMapLoaded) return;
+
+        console.log('🔄 刷新所有地图标记');
+
+        // 重新创建所有标记
+        this.recreateMarkers();
+
+        // 更新待定点显示
+        this.updateTogglePendingButton();
+
+        console.log('✅ 标记刷新完成');
     }
 
     // 绘制路线
@@ -2352,7 +3377,35 @@ class TravelPlanner {
         const activePlaces = this.travelList.filter(place => !place.isPending && !place.isBlank && place.lat && place.lng);
 
         if (!this.isMapLoaded || activePlaces.length < 2) {
-            // 如果只有一个地点或没有地点，清除路线
+            this.clearAllRoutes();
+            return;
+        }
+
+        const selectedMapApi = this.settings.selectedMapApi;
+        console.log(`🛣️ 使用${selectedMapApi}绘制路线`);
+
+        if (selectedMapApi === 'google' && typeof google !== 'undefined') {
+            this.drawGoogleRoute(activePlaces);
+        } else if (selectedMapApi === 'gaode') {
+            // 高德路线规划使用Web服务API，但绘制需要AMap对象
+            if (typeof AMap !== 'undefined') {
+                this.drawGaodeRoute(activePlaces);
+            } else {
+                console.warn('⚠️ AMap对象未加载，无法绘制高德地图路线');
+                this.drawSimplePath(activePlaces);
+            }
+        } else {
+            console.warn('⚠️ 当前地图API不支持路线绘制，使用简单连线');
+            this.drawSimplePath(activePlaces);
+        }
+    }
+
+    // 清除所有路线
+    clearAllRoutes() {
+        const selectedMapApi = this.settings.selectedMapApi;
+
+        if (selectedMapApi === 'google' && typeof google !== 'undefined') {
+            // 清除Google Maps路线
             if (this.directionsRenderer) {
                 this.directionsRenderer.setDirections({ routes: [] });
             }
@@ -2360,14 +3413,21 @@ class TravelPlanner {
                 this.polyline.setMap(null);
                 this.polyline = null;
             }
-            // 清除多彩路线段
             if (this.polylines) {
                 this.polylines.forEach(polyline => polyline.setMap(null));
                 this.polylines = [];
             }
-            return;
+        } else if (selectedMapApi === 'gaode' && typeof AMap !== 'undefined') {
+            // 清除高德地图路线
+            if (this.polylines) {
+                this.polylines.forEach(polyline => this.map.remove(polyline));
+                this.polylines = [];
+            }
         }
+    }
 
+    // Google Maps路线绘制
+    drawGoogleRoute(activePlaces) {
         // 清除现有路线
         if (this.directionsRenderer) {
             this.directionsRenderer.setDirections({ routes: [] });
@@ -2383,7 +3443,7 @@ class TravelPlanner {
         }
 
         // 如果有两个以上激活地点，尝试使用 Directions API
-        if (activePlaces.length >= 2) {
+        if (activePlaces.length >= 2 && this.directionsService) {
             // 创建路线点
             const waypoints = activePlaces.slice(1, -1).map(place => ({
                 location: { lat: place.lat, lng: place.lng },
@@ -2404,52 +3464,265 @@ class TravelPlanner {
             this.directionsService.route(request, (result, status) => {
                 if (status === 'OK') {
                     this.directionsRenderer.setDirections(result);
-                    console.log('使用 Directions API 绘制路线');
+                    console.log('✅ 使用Google Directions API绘制路线');
                 } else {
-                    console.log('Directions API 失败，使用多彩连线:', status);
+                    console.log('⚠️ Google Directions API失败，使用多彩连线:', status);
                     // 如果路线规划失败，绘制多彩连线
-                    this.drawSimplePath();
+                    this.drawGoogleSimplePath(activePlaces);
                 }
             });
         } else {
             // 只有两个地点时，直接绘制多彩连线
-            this.drawSimplePath();
+            this.drawGoogleSimplePath(activePlaces);
         }
     }
 
-    // 绘制简单路径（多彩线条）
-    drawSimplePath() {
-        // 只处理激活状态且非空白的地点
-        const activePlaces = this.travelList.filter(place => !place.isPending && !place.isBlank && place.lat && place.lng);
-
-        if (!this.isMapLoaded || activePlaces.length < 2) {
-            return;
-        }
-
-        // 清除现有的多彩路线段
+    // 高德地图路线绘制
+    drawGaodeRoute(activePlaces) {
+        // 清除现有路线
         if (this.polylines) {
-            this.polylines.forEach(polyline => polyline.setMap(null));
+            this.polylines.forEach(polyline => this.map.remove(polyline));
             this.polylines = [];
         }
 
-        // 定义多种颜色用于不同路线段
+        const apiKey = this.getApiKey('gaode');
+        if (!apiKey) {
+            console.warn('⚠️ 高德API密钥未配置，使用简单连线');
+            this.drawGaodeSimplePath(activePlaces);
+            return;
+        }
+
+        // 尝试使用高德路径规划API
+        console.log('🛣️ 使用高德路径规划API绘制路线');
+        this.drawGaodeRoutesWithAPI(activePlaces, apiKey);
+    }
+
+    // 使用高德路径规划API绘制路线（快速版本）
+    async drawGaodeRoutesWithAPI(activePlaces, apiKey) {
+        try {
+            this.polylines = this.polylines || [];
+            console.log(`🛣️ 开始快速绘制${activePlaces.length - 1}段路线`);
+
+            // 先立即绘制简单连线（快速显示）
+            this.drawGaodeSimplePath(activePlaces);
+            console.log('✅ 已显示简单路线，正在获取详细路径...');
+
+            // 然后异步获取并替换为详细路径
+            this.drawDetailedGaodeRoutes(activePlaces, apiKey);
+
+        } catch (error) {
+            console.error('❌ 高德路径规划出错:', error);
+            // 回退到简单路径
+            this.drawGaodeSimplePath(activePlaces);
+        }
+    }
+
+    // 异步绘制详细路线（后台处理）
+    async drawDetailedGaodeRoutes(activePlaces, apiKey) {
+        try {
+            const routePromises = [];
+
+            // 批量发起所有路径规划请求
+            for (let i = 0; i < activePlaces.length - 1; i++) {
+                const origin = activePlaces[i];
+                const destination = activePlaces[i + 1];
+
+                routePromises.push(
+                    this.getGaodeRoute(origin, destination, apiKey)
+                        .then(routeData => ({ index: i, routeData, origin, destination }))
+                        .catch(error => ({ index: i, error, origin, destination }))
+                );
+            }
+
+            console.log(`🔄 正在批量获取${routePromises.length}段详细路径...`);
+
+            // 等待所有路径规划完成
+            const results = await Promise.all(routePromises);
+
+            // 清除简单路线
+            if (this.polylines) {
+                this.polylines.forEach(polyline => this.map.remove(polyline));
+                this.polylines = [];
+            }
+
+            // 绘制详细路线
+            let successCount = 0;
+            results.forEach(result => {
+                if (result.error) {
+                    console.warn(`⚠️ 路径${result.index + 1}规划失败，使用直线: ${result.origin.name} -> ${result.destination.name}`);
+                    this.drawGaodeDirectLine(result.origin, result.destination, result.index);
+                } else if (result.routeData.success) {
+                    this.drawGaodeRouteSegment(result.routeData.coordinates, result.index);
+                    successCount++;
+                } else {
+                    console.warn(`⚠️ 路径${result.index + 1}规划失败，使用直线: ${result.origin.name} -> ${result.destination.name}`);
+                    this.drawGaodeDirectLine(result.origin, result.destination, result.index);
+                }
+            });
+
+            console.log(`✅ 详细路线绘制完成，成功: ${successCount}/${results.length}`);
+
+        } catch (error) {
+            console.error('❌ 批量路径规划失败:', error);
+        }
+    }
+
+    // 获取高德路径规划数据
+    async getGaodeRoute(origin, destination, apiKey) {
+        try {
+            const url = 'https://restapi.amap.com/v3/direction/driving';
+            const params = new URLSearchParams({
+                key: apiKey,
+                origin: `${origin.lng},${origin.lat}`,
+                destination: `${destination.lng},${destination.lat}`,
+                extensions: 'all'  // 获取详细路径信息
+            });
+
+            const response = await fetch(`${url}?${params.toString()}`);
+
+            if (!response.ok) {
+                throw new Error(`HTTP错误: ${response.status}`);
+            }
+
+            const data = await response.json();
+
+            if (data.status === '1' && data.route && data.route.paths && data.route.paths.length > 0) {
+                const path = data.route.paths[0];
+
+                // 解析路径坐标
+                const coordinates = [];
+                if (path.steps && path.steps.length > 0) {
+                    path.steps.forEach(step => {
+                        if (step.polyline) {
+                            // 解析polyline字符串为坐标数组
+                            const stepCoords = this.parseGaodePolyline(step.polyline);
+                            coordinates.push(...stepCoords);
+                        }
+                    });
+                }
+
+                if (coordinates.length === 0) {
+                    // 如果没有详细路径，使用起终点连线
+                    coordinates.push([origin.lng, origin.lat], [destination.lng, destination.lat]);
+                }
+
+                return {
+                    success: true,
+                    coordinates: coordinates,
+                    distance: parseFloat(path.distance),
+                    duration: parseFloat(path.duration)
+                };
+            } else {
+                console.warn('⚠️ 高德路径规划API返回错误:', data.info);
+                return { success: false };
+            }
+        } catch (error) {
+            console.error('❌ 调用高德路径规划API失败:', error);
+            return { success: false };
+        }
+    }
+
+    // 解析高德地图polyline字符串
+    parseGaodePolyline(polylineStr) {
+        if (!polylineStr) return [];
+
+        try {
+            // 高德的polyline格式：经度,纬度;经度,纬度;...
+            return polylineStr.split(';').map(point => {
+                const [lng, lat] = point.split(',').map(Number);
+                return [lng, lat];
+            }).filter(coord => coord.length === 2 && !isNaN(coord[0]) && !isNaN(coord[1]));
+        } catch (error) {
+            console.error('❌ 解析polyline失败:', error);
+            return [];
+        }
+    }
+
+    // 绘制高德路线段
+    drawGaodeRouteSegment(coordinates, segmentIndex) {
+        if (!coordinates || coordinates.length < 2) {
+            console.warn('⚠️ 路线坐标数据不足');
+            return;
+        }
+
         const colors = [
-            '#e74c3c',  // 红色
-            '#3498db',  // 蓝色  
-            '#2ecc71',  // 绿色
-            '#f39c12',  // 橙色
-            '#9b59b6',  // 紫色
-            '#1abc9c',  // 青色
-            '#e67e22',  // 深橙色
-            '#34495e',  // 深蓝灰色
-            '#f1c40f',  // 黄色
-            '#e91e63'   // 粉红色
+            '#e74c3c', '#3498db', '#2ecc71', '#f39c12', '#9b59b6',
+            '#1abc9c', '#e67e22', '#34495e', '#f1c40f', '#e91e63'
         ];
 
-        // 创建路径点
+        const color = colors[segmentIndex % colors.length];
+
+        try {
+            const polyline = new AMap.Polyline({
+                path: coordinates,
+                strokeColor: color,
+                strokeOpacity: 0.9,
+                strokeWeight: 8,  // 增加线条宽度
+                strokeStyle: 'solid',
+                zIndex: 100 + segmentIndex,
+                // 添加线条样式优化
+                lineJoin: 'round',
+                lineCap: 'round',
+                // 添加阴影效果
+                strokeDasharray: [0, 0],
+                // 边框效果
+                borderWeight: 2,
+                outlineColor: '#ffffff'
+            });
+
+            this.map.add(polyline);
+            this.polylines.push(polyline);
+
+            console.log(`✅ 已绘制路线段 ${segmentIndex + 1}，坐标点数: ${coordinates.length}`);
+        } catch (error) {
+            console.error('❌ 绘制高德路线段失败:', error);
+        }
+    }
+
+    // 绘制高德直线（备用方案）
+    drawGaodeDirectLine(origin, destination, segmentIndex) {
+        const colors = [
+            '#e74c3c', '#3498db', '#2ecc71', '#f39c12', '#9b59b6',
+            '#1abc9c', '#e67e22', '#34495e', '#f1c40f', '#e91e63'
+        ];
+
+        const color = colors[segmentIndex % colors.length];
+        const path = [
+            [origin.lng, origin.lat],
+            [destination.lng, destination.lat]
+        ];
+
+        try {
+            const polyline = new AMap.Polyline({
+                path: path,
+                strokeColor: color,
+                strokeOpacity: 0.7,
+                strokeWeight: 6,  // 增加线条宽度
+                strokeStyle: 'dashed', // 虚线表示直线距离
+                strokeDasharray: [10, 5], // 虚线间隔
+                zIndex: 100 + segmentIndex,
+                lineJoin: 'round',
+                lineCap: 'round'
+            });
+
+            this.map.add(polyline);
+            this.polylines.push(polyline);
+
+            console.log(`✅ 已绘制直线段 ${segmentIndex + 1} (备用方案)`);
+        } catch (error) {
+            console.error('❌ 绘制高德直线段失败:', error);
+        }
+    }
+
+    // Google Maps简单路径绘制
+    drawGoogleSimplePath(activePlaces) {
+        const colors = [
+            '#e74c3c', '#3498db', '#2ecc71', '#f39c12', '#9b59b6',
+            '#1abc9c', '#e67e22', '#34495e', '#f1c40f', '#e91e63'
+        ];
+
         const path = activePlaces.map(place => ({ lat: place.lat, lng: place.lng }));
 
-        // 为每个路段创建不同颜色的polyline
         for (let i = 0; i < path.length - 1; i++) {
             const segmentPath = [path[i], path[i + 1]];
             const color = colors[i % colors.length];
@@ -2466,25 +3739,58 @@ class TravelPlanner {
             polyline.setMap(this.map);
             this.polylines.push(polyline);
         }
+    }
 
-        // 调整地图视野以包含所有激活点，但保持合理的缩放级别
-        if (activePlaces.length > 1) {
-            const bounds = new google.maps.LatLngBounds();
-            activePlaces.forEach(place => bounds.extend({ lat: place.lat, lng: place.lng }));
+    // 高德地图简单路径绘制  
+    drawGaodeSimplePath(activePlaces) {
+        const colors = [
+            '#e74c3c', '#3498db', '#2ecc71', '#f39c12', '#9b59b6',
+            '#1abc9c', '#e67e22', '#34495e', '#f1c40f', '#e91e63'
+        ];
 
-            // 添加一些边距
-            const extendedBounds = this.extendBounds(bounds, 0.1);
-            this.map.fitBounds(extendedBounds);
+        for (let i = 0; i < activePlaces.length - 1; i++) {
+            const color = colors[i % colors.length];
+            const path = [
+                [activePlaces[i].lng, activePlaces[i].lat],
+                [activePlaces[i + 1].lng, activePlaces[i + 1].lat]
+            ];
 
-            // 确保缩放级别不会太高
-            google.maps.event.addListenerOnce(this.map, 'bounds_changed', () => {
-                if (this.map.getZoom() > 16) {
-                    this.map.setZoom(16);
-                }
+            const polyline = new AMap.Polyline({
+                path: path,
+                strokeColor: color,
+                strokeOpacity: 0.9,
+                strokeWeight: 8,  // 增加线条宽度
+                strokeStyle: 'solid',
+                zIndex: 100 + i,
+                lineJoin: 'round',
+                lineCap: 'round'
             });
+
+            this.map.add(polyline);
+            this.polylines.push(polyline);
+        }
+    }
+
+    // 绘制简单路径（通用方法）
+    drawSimplePath(activePlaces) {
+        if (!activePlaces) {
+            activePlaces = this.travelList.filter(place => !place.isPending && !place.isBlank && place.lat && place.lng);
         }
 
-        console.log('绘制多彩路径，共', activePlaces.length, '个激活地点，', activePlaces.length - 1, '个彩色路线段');
+        if (!this.isMapLoaded || activePlaces.length < 2) {
+            return;
+        }
+
+        const selectedMapApi = this.settings.selectedMapApi;
+        console.log(`🎨 绘制简单多彩路径，使用${selectedMapApi}`);
+
+        if (selectedMapApi === 'google' && typeof google !== 'undefined') {
+            this.drawGoogleSimplePath(activePlaces);
+        } else if (selectedMapApi === 'gaode' && typeof AMap !== 'undefined') {
+            this.drawGaodeSimplePath(activePlaces);
+        } else {
+            console.warn('⚠️ 无法绘制路径：地图API未加载');
+        }
     }
 
     // 扩展边界的辅助方法
@@ -2575,6 +3881,33 @@ class TravelPlanner {
         console.log(`打开${appName}导航: 从 "${fromPlace.name}" 到 "${toPlace.name}"`);
     }
 
+    // 设置marker可见性（兼容Google Maps和高德地图）
+    setMarkerVisible(marker, visible) {
+        const selectedMapApi = this.settings.selectedMapApi;
+
+        if (selectedMapApi === 'google' && typeof google !== 'undefined') {
+            // Google Maps marker
+            if (marker && typeof marker.setVisible === 'function') {
+                marker.setVisible(visible);
+            }
+        } else if (selectedMapApi === 'gaode' && typeof AMap !== 'undefined') {
+            // 高德地图marker
+            if (marker) {
+                if (visible) {
+                    if (typeof marker.show === 'function') {
+                        marker.show();
+                    }
+                } else {
+                    if (typeof marker.hide === 'function') {
+                        marker.hide();
+                    }
+                }
+            }
+        } else {
+            console.warn('⚠️ 未知的地图API类型，无法设置marker可见性');
+        }
+    }
+
     // 计算单个路线段距离
     calculateSegmentDistance(segmentKey) {
         const [fromId, toId] = segmentKey.split('-');
@@ -2583,95 +3916,216 @@ class TravelPlanner {
 
         if (!fromPlace || !toPlace) return;
 
-        // 始终使用Google API计算驾车距离
-        if (this.distanceMatrixService && this.isMapLoaded) {
-            this.distanceMatrixService.getDistanceMatrix({
-                origins: [{ lat: fromPlace.lat, lng: fromPlace.lng }],
-                destinations: [{ lat: toPlace.lat, lng: toPlace.lng }],
-                travelMode: google.maps.TravelMode.DRIVING,
-                unitSystem: google.maps.UnitSystem.METRIC,
-                avoidHighways: false,
-                avoidTolls: false
-            }, (response, status) => {
-                const distanceElement = document.getElementById(`distance-${toId}`);
-                const durationElement = document.getElementById(`duration-${toId}`);
+        const selectedMapApi = this.settings.selectedMapApi;
+        console.log(`📏 计算路线段距离: ${fromPlace.name} -> ${toPlace.name}, 使用${selectedMapApi} API`);
 
-                if (status === 'OK' && response.rows[0].elements[0].status === 'OK') {
-                    const element = response.rows[0].elements[0];
-
-                    if (distanceElement) {
-                        distanceElement.textContent = element.distance.text;
-                    }
-                    if (durationElement) {
-                        durationElement.textContent = element.duration.text;
-                    }
-                } else {
-                    // API失败时使用直线距离
-                    const distance = this.calculateStraightDistance(fromPlace.lat, fromPlace.lng, toPlace.lat, toPlace.lng);
-                    if (distanceElement) {
-                        distanceElement.textContent = `${distance.toFixed(1)} 公里 (估算)`;
-                    }
-                    if (durationElement) {
-                        durationElement.textContent = `约${(distance / 50 * 60).toFixed(0)} 分钟`;
-                    }
-                }
-            });
+        if (selectedMapApi === 'google' && this.distanceMatrixService && this.isMapLoaded) {
+            this.calculateSegmentDistanceWithGoogle(fromPlace, toPlace, toId);
+        } else if (selectedMapApi === 'gaode') {
+            this.calculateSegmentDistanceWithGaode(fromPlace, toPlace, toId);
         } else {
-            // 如果Google API不可用，使用直线距离
-            const distance = this.calculateStraightDistance(fromPlace.lat, fromPlace.lng, toPlace.lat, toPlace.lng);
+            // 使用直线距离作为备用
+            this.calculateSegmentDistanceWithStraightLine(fromPlace, toPlace, toId);
+        }
+    }
+
+    // 使用Google API计算路线段距离
+    calculateSegmentDistanceWithGoogle(fromPlace, toPlace, toId) {
+        this.distanceMatrixService.getDistanceMatrix({
+            origins: [{ lat: fromPlace.lat, lng: fromPlace.lng }],
+            destinations: [{ lat: toPlace.lat, lng: toPlace.lng }],
+            travelMode: google.maps.TravelMode.DRIVING,
+            unitSystem: google.maps.UnitSystem.METRIC,
+            avoidHighways: false,
+            avoidTolls: false
+        }, (response, status) => {
             const distanceElement = document.getElementById(`distance-${toId}`);
             const durationElement = document.getElementById(`duration-${toId}`);
 
-            if (distanceElement) {
-                distanceElement.textContent = `${distance.toFixed(1)} 公里 (直线)`;
+            if (status === 'OK' && response.rows[0].elements[0].status === 'OK') {
+                const element = response.rows[0].elements[0];
+
+                if (distanceElement) {
+                    distanceElement.textContent = element.distance.text;
+                }
+                if (durationElement) {
+                    durationElement.textContent = element.duration.text;
+                }
+            } else {
+                // API失败时使用直线距离
+                this.calculateSegmentDistanceWithStraightLine(fromPlace, toPlace, toId, '估算');
             }
-            if (durationElement) {
-                durationElement.textContent = `约${(distance / 50 * 60).toFixed(0)} 分钟`;
+        });
+    }
+
+    // 使用高德API计算路线段距离
+    async calculateSegmentDistanceWithGaode(fromPlace, toPlace, toId) {
+        const apiKey = this.getApiKey('gaode');
+        if (!apiKey) {
+            console.warn('⚠️ 高德API密钥未配置，使用直线距离');
+            this.calculateSegmentDistanceWithStraightLine(fromPlace, toPlace, toId, '直线');
+            return;
+        }
+
+        try {
+            const result = await this.calculateGaodeDistance(fromPlace, toPlace, apiKey);
+            const distanceElement = document.getElementById(`distance-${toId}`);
+            const durationElement = document.getElementById(`duration-${toId}`);
+
+            if (result.success) {
+                if (distanceElement) {
+                    distanceElement.textContent = `${result.distance.toFixed(1)} 公里`;
+                }
+                if (durationElement) {
+                    durationElement.textContent = `${Math.round(result.duration)} 分钟`;
+                }
+            } else {
+                // API失败时使用直线距离
+                this.calculateSegmentDistanceWithStraightLine(fromPlace, toPlace, toId, '直线');
             }
+        } catch (error) {
+            console.error('❌ 高德路线段距离计算出错:', error);
+            this.calculateSegmentDistanceWithStraightLine(fromPlace, toPlace, toId, '直线');
+        }
+    }
+
+    // 使用直线距离计算路线段距离
+    calculateSegmentDistanceWithStraightLine(fromPlace, toPlace, toId, suffix = '直线') {
+        const distance = this.calculateStraightDistance(fromPlace.lat, fromPlace.lng, toPlace.lat, toPlace.lng);
+        const distanceElement = document.getElementById(`distance-${toId}`);
+        const durationElement = document.getElementById(`duration-${toId}`);
+
+        if (distanceElement) {
+            distanceElement.textContent = `${distance.toFixed(1)} 公里 (${suffix})`;
+        }
+        if (durationElement) {
+            durationElement.textContent = `约${Math.round(distance / 50 * 60)} 分钟`;
         }
     }
 
     // 获取当前位置
     getCurrentLocation() {
+        console.log('🎯 开始获取当前位置...');
+
         if (navigator.geolocation) {
             navigator.geolocation.getCurrentPosition(
                 (position) => {
                     const lat = position.coords.latitude;
                     const lng = position.coords.longitude;
 
+                    console.log(`📍 获取到位置: ${lat.toFixed(6)}, ${lng.toFixed(6)}`);
+
                     if (this.isMapLoaded) {
-                        this.map.setCenter({ lat: lat, lng: lng });
-                        this.map.setZoom(15);
+                        const selectedMapApi = this.settings.selectedMapApi;
 
-                        // 添加当前位置标记
-                        if (this.currentLocationMarker) {
-                            this.currentLocationMarker.setMap(null);
+                        if (selectedMapApi === 'google' && typeof google !== 'undefined') {
+                            this.setCurrentLocationGoogle(lat, lng);
+                        } else if (selectedMapApi === 'gaode' && typeof AMap !== 'undefined') {
+                            this.setCurrentLocationGaode(lat, lng);
+                        } else {
+                            console.warn('地图API未加载，无法在地图上显示位置');
                         }
-
-                        this.currentLocationMarker = new google.maps.Marker({
-                            position: { lat: lat, lng: lng },
-                            map: this.map,
-                            title: '我的位置',
-                            icon: {
-                                url: 'data:image/svg+xml;charset=UTF-8,' + encodeURIComponent(`
-                                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-                                        <circle cx="12" cy="12" r="8" fill="#27ae60" stroke="white" stroke-width="2"/>
-                                        <circle cx="12" cy="12" r="3" fill="white"/>
-                                    </svg>
-                                `),
-                                scaledSize: new google.maps.Size(24, 24)
-                            }
-                        });
                     }
 
-                    alert(`已定位到您的位置: ${lat.toFixed(6)}, ${lng.toFixed(6)}`);
+                    this.showToast(`✅ 已定位到您的位置: ${lat.toFixed(6)}, ${lng.toFixed(6)}`);
                 },
                 (error) => {
-                    alert('定位失败: ' + error.message);
+                    console.error('❌ 定位失败:', error);
+                    let errorMessage = '定位失败: ';
+                    switch (error.code) {
+                        case error.PERMISSION_DENIED:
+                            errorMessage += '用户拒绝了定位请求';
+                            break;
+                        case error.POSITION_UNAVAILABLE:
+                            errorMessage += '位置信息不可用';
+                            break;
+                        case error.TIMEOUT:
+                            errorMessage += '定位请求超时';
+                            break;
+                        default:
+                            errorMessage += error.message;
+                    }
+                    this.showToast(errorMessage);
                 }
             );
         } else {
-            alert('您的浏览器不支持地理定位');
+            this.showToast('❌ 您的浏览器不支持地理定位功能');
+        }
+    }
+
+    // Google Maps 设置当前位置
+    setCurrentLocationGoogle(lat, lng) {
+        try {
+            this.map.setCenter({ lat: lat, lng: lng });
+            this.map.setZoom(15);
+
+            // 添加当前位置标记
+            if (this.currentLocationMarker) {
+                this.currentLocationMarker.setMap(null);
+            }
+
+            this.currentLocationMarker = new google.maps.Marker({
+                position: { lat: lat, lng: lng },
+                map: this.map,
+                title: '我的位置',
+                icon: {
+                    url: 'data:image/svg+xml;charset=UTF-8,' + encodeURIComponent(`
+                        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                            <circle cx="12" cy="12" r="8" fill="#27ae60" stroke="white" stroke-width="2"/>
+                            <circle cx="12" cy="12" r="3" fill="white"/>
+                        </svg>
+                    `),
+                    scaledSize: new google.maps.Size(24, 24)
+                }
+            });
+
+            console.log('✅ Google Maps 当前位置标记已设置');
+        } catch (error) {
+            console.error('❌ Google Maps 设置位置失败:', error);
+        }
+    }
+
+    // 高德地图设置当前位置
+    setCurrentLocationGaode(lat, lng) {
+        try {
+            this.map.setCenter([lng, lat]); // 高德地图使用 [经度, 纬度] 格式
+            this.map.setZoom(15);
+
+            // 添加当前位置标记
+            if (this.currentLocationMarker) {
+                this.map.remove(this.currentLocationMarker);
+            }
+
+            this.currentLocationMarker = new AMap.Marker({
+                position: [lng, lat],
+                title: '我的位置',
+                content: `
+                    <div style="
+                        width: 24px; 
+                        height: 24px; 
+                        background: #27ae60; 
+                        border: 2px solid white; 
+                        border-radius: 50%; 
+                        display: flex; 
+                        align-items: center; 
+                        justify-content: center;
+                        box-shadow: 0 2px 6px rgba(0,0,0,0.3);
+                    ">
+                        <div style="
+                            width: 8px; 
+                            height: 8px; 
+                            background: white; 
+                            border-radius: 50%;
+                        "></div>
+                    </div>
+                `
+            });
+
+            this.map.add(this.currentLocationMarker);
+
+            console.log('✅ 高德地图当前位置标记已设置');
+        } catch (error) {
+            console.error('❌ 高德地图设置位置失败:', error);
         }
     }
 
@@ -2679,13 +4133,34 @@ class TravelPlanner {
     toggleSatellite() {
         if (!this.isMapLoaded) return;
 
-        const currentType = this.map.getMapTypeId();
-        if (currentType === google.maps.MapTypeId.SATELLITE) {
-            this.map.setMapTypeId(google.maps.MapTypeId.ROADMAP);
-            document.getElementById('satelliteBtn').textContent = '🛰️ 卫星图';
+        const selectedMapApi = this.settings.selectedMapApi;
+        const satelliteBtn = document.getElementById('satelliteBtn');
+
+        if (selectedMapApi === 'google' && typeof google !== 'undefined') {
+            const currentType = this.map.getMapTypeId();
+            if (currentType === google.maps.MapTypeId.SATELLITE) {
+                this.map.setMapTypeId(google.maps.MapTypeId.ROADMAP);
+                satelliteBtn.textContent = '🛰️ 卫星图';
+            } else {
+                this.map.setMapTypeId(google.maps.MapTypeId.SATELLITE);
+                satelliteBtn.textContent = '🗺️ 普通图';
+            }
+        } else if (selectedMapApi === 'gaode' && typeof AMap !== 'undefined') {
+            // 高德地图切换卫星图层
+            const currentLayers = this.map.getLayers();
+            const hasSatellite = currentLayers.some(layer => layer.CLASS_NAME === 'AMap.TileLayer.Satellite');
+
+            if (hasSatellite) {
+                // 切换回普通地图
+                this.map.setMapStyle('amap://styles/normal');
+                satelliteBtn.textContent = '🛰️ 卫星图';
+            } else {
+                // 切换到卫星图
+                this.map.setMapStyle('amap://styles/satellite');
+                satelliteBtn.textContent = '🗺️ 普通图';
+            }
         } else {
-            this.map.setMapTypeId(google.maps.MapTypeId.SATELLITE);
-            document.getElementById('satelliteBtn').textContent = '🗺️ 普通图';
+            this.showToast('⚠️ 当前地图API不支持卫星图切换');
         }
     }
 
@@ -2695,15 +4170,28 @@ class TravelPlanner {
 
         this.showPlaceNames = !this.showPlaceNames;
         const toggleBtn = document.getElementById('toggleNamesBtn');
+        const selectedMapApi = this.settings.selectedMapApi;
 
-        if (PlaceLabel && (this.placeLabels.length > 0 || this.pendingMarkers.length > 0)) {
+        if (this.placeLabels.length > 0 || this.pendingMarkers.length > 0) {
             if (this.showPlaceNames) {
                 // 显示所有地点名称（包括游玩点和待定点）
                 this.placeLabels.forEach(l => {
-                    if (l.label) l.label.show();
+                    if (l.label) {
+                        if (selectedMapApi === 'google' && typeof google !== 'undefined') {
+                            l.label.show();
+                        } else if (selectedMapApi === 'gaode' && typeof AMap !== 'undefined') {
+                            l.label.show();
+                        }
+                    }
                 });
                 this.pendingMarkers.forEach(m => {
-                    if (m.label) m.label.show();
+                    if (m.label) {
+                        if (selectedMapApi === 'google' && typeof google !== 'undefined') {
+                            m.label.show();
+                        } else if (selectedMapApi === 'gaode' && typeof AMap !== 'undefined') {
+                            m.label.show();
+                        }
+                    }
                 });
                 toggleBtn.textContent = '🏷️ 隐藏名称';
                 toggleBtn.title = '隐藏地点名称';
@@ -2711,20 +4199,60 @@ class TravelPlanner {
             } else {
                 // 隐藏所有地点名称（包括游玩点和待定点）
                 this.placeLabels.forEach(l => {
-                    if (l.label) l.label.hide();
+                    if (l.label) {
+                        if (selectedMapApi === 'google' && typeof google !== 'undefined') {
+                            l.label.hide();
+                        } else if (selectedMapApi === 'gaode' && typeof AMap !== 'undefined') {
+                            l.label.hide();
+                        }
+                    }
                 });
                 this.pendingMarkers.forEach(m => {
-                    if (m.label) m.label.hide();
+                    if (m.label) {
+                        if (selectedMapApi === 'google' && typeof google !== 'undefined') {
+                            m.label.hide();
+                        } else if (selectedMapApi === 'gaode' && typeof AMap !== 'undefined') {
+                            m.label.hide();
+                        }
+                    }
                 });
                 toggleBtn.textContent = '🏷️ 显示名称';
                 toggleBtn.title = '显示地点名称';
                 this.showToast('已隐藏地点名称');
             }
         } else {
-            // 演示模式或无标签时的提示
-            this.showToast('标签功能需要Google Maps API支持');
+            // 重新创建标记和标签
+            this.recreateMarkers();
             toggleBtn.textContent = this.showPlaceNames ? '🏷️ 隐藏名称' : '🏷️ 显示名称';
+            toggleBtn.title = this.showPlaceNames ? '隐藏地点名称' : '显示地点名称';
+            this.showToast(this.showPlaceNames ? '已显示地点名称' : '已隐藏地点名称');
         }
+    }
+
+    // 更新待定点按钮状态
+    updateTogglePendingButton() {
+        const toggleBtn = document.getElementById('togglePendingBtn');
+        if (!toggleBtn) return;
+
+        const pendingCount = this.travelList.filter(place => place.isPending).length;
+
+        if (this.showPendingPlaces) {
+            toggleBtn.textContent = '⏳ 隐藏待定点';
+            toggleBtn.title = '隐藏待定游玩点';
+            // 如果当前显示待定点，重新创建待定点标记
+            if (this.isMapLoaded) {
+                this.createPendingMarkers();
+            }
+        } else {
+            toggleBtn.textContent = '⏳ 显示待定点';
+            toggleBtn.title = '显示待定游玩点';
+            // 如果当前隐藏待定点，清除待定点标记
+            if (this.isMapLoaded) {
+                this.clearPendingMarkers();
+            }
+        }
+
+        console.log(`🔄 待定点按钮状态已更新: ${this.showPendingPlaces ? '显示' : '隐藏'}, 待定点数量: ${pendingCount}`);
     }
 
     // 切换显示/隐藏待定点
@@ -2768,12 +4296,22 @@ class TravelPlanner {
 
     // 清除待定点标记
     clearPendingMarkers() {
+        const selectedMapApi = this.settings.selectedMapApi;
+
         this.pendingMarkers.forEach(markerData => {
             if (markerData.marker) {
-                markerData.marker.setMap(null);
+                if (selectedMapApi === 'google' && typeof google !== 'undefined') {
+                    markerData.marker.setMap(null);
+                } else if (selectedMapApi === 'gaode' && typeof AMap !== 'undefined') {
+                    this.map.remove(markerData.marker);
+                }
             }
             if (markerData.label) {
-                markerData.label.setMap(null);
+                if (selectedMapApi === 'google' && typeof google !== 'undefined') {
+                    markerData.label.setMap(null);
+                } else if (selectedMapApi === 'gaode' && typeof AMap !== 'undefined') {
+                    this.map.remove(markerData.label);
+                }
             }
         });
         this.pendingMarkers = [];
@@ -2785,7 +4323,51 @@ class TravelPlanner {
 
         // 使用自定义名称（如果有的话）
         const displayName = place.customName || place.name;
+        const selectedMapApi = this.settings.selectedMapApi;
+        let marker = null;
+        let placeLabel = null;
 
+        if (selectedMapApi === 'google' && typeof google !== 'undefined') {
+            // Google Maps 待定点标记
+            marker = this.createGooglePendingMarker(place, displayName);
+
+            // 创建Google Maps标签
+            if (PlaceLabel) {
+                placeLabel = new PlaceLabel(
+                    { lat: place.lat, lng: place.lng },
+                    displayName,
+                    this.map
+                );
+
+                // 根据当前名称显示状态决定是否显示
+                if (!this.showPlaceNames) {
+                    placeLabel.hide();
+                }
+            }
+        } else if (selectedMapApi === 'gaode' && typeof AMap !== 'undefined') {
+            // 高德地图待定点标记
+            marker = this.createGaodePendingMarker(place, displayName);
+
+            // 创建高德地图标签
+            if (this.showPlaceNames) {
+                placeLabel = this.createGaodePendingLabel(place, displayName);
+            }
+        } else {
+            console.warn('⚠️ 无法创建待定点标记：地图API未加载');
+            return;
+        }
+
+        // 存储标记信息
+        this.pendingMarkers.push({
+            id: place.id,
+            marker: marker,
+            label: placeLabel,
+            place: place
+        });
+    }
+
+    // 创建Google Maps待定点标记
+    createGooglePendingMarker(place, displayName) {
         const marker = new google.maps.Marker({
             position: { lat: place.lat, lng: place.lng },
             map: this.map,
@@ -2800,7 +4382,7 @@ class TravelPlanner {
                         <!-- 内圆 -->
                         <circle cx="20" cy="15" r="6" fill="#ffffff"/>
                         <!-- 待定图标 -->
-                        <text x="20" y="19" text-anchor="middle" font-family="Arial" font-size="12" font-weight="bold" fill="#f39c12">⏳</text>
+                        <text x="20" y="19" text-anchor="middle" font-family="Arial" font-size="10" font-weight="bold" fill="#f39c12">⏳</text>
                     </svg>
                 `),
                 scaledSize: new google.maps.Size(40, 50),
@@ -2808,21 +4390,6 @@ class TravelPlanner {
             },
             zIndex: 500 // 确保待定点在游玩点之下
         });
-
-        // 创建自定义标签显示地点名称（仅在Google Maps API可用时）
-        let placeLabel = null;
-        if (PlaceLabel) {
-            placeLabel = new PlaceLabel(
-                { lat: place.lat, lng: place.lng },
-                displayName,
-                this.map
-            );
-
-            // 根据当前名称显示状态决定是否显示
-            if (!this.showPlaceNames) {
-                placeLabel.hide();
-            }
-        }
 
         // 添加点击事件
         marker.addListener('click', () => {
@@ -2837,13 +4404,98 @@ class TravelPlanner {
             });
         });
 
-        // 存储标记信息
-        this.pendingMarkers.push({
-            id: place.id,
-            marker: marker,
-            label: placeLabel,
-            place: place
+        return marker;
+    }
+
+    // 创建高德地图待定点标记
+    createGaodePendingMarker(place, displayName) {
+        // 使用SVG创建待定点标记
+        const pendingMarkerSvg = `
+            <svg width="40" height="50" viewBox="0 0 40 50" xmlns="http://www.w3.org/2000/svg">
+                <!-- 阴影 -->
+                <ellipse cx="20" cy="47" rx="8" ry="3" fill="rgba(0,0,0,0.3)"/>
+                <!-- 主要标记 -->
+                <path d="M20 3C13.4 3 8 8.4 8 15C8 24.75 20 47 20 47C20 47 32 24.75 32 15C32 8.4 26.6 3 20 3Z" fill="#f39c12" stroke="#ffffff" stroke-width="2"/>
+                <!-- 内圆 -->
+                <circle cx="20" cy="15" r="6" fill="#ffffff"/>
+                <!-- 待定图标 -->
+                <text x="20" y="19" text-anchor="middle" font-family="Arial, sans-serif" font-size="10" font-weight="bold" fill="#f39c12">⏳</text>
+            </svg>
+        `;
+
+        const marker = new AMap.Marker({
+            position: [place.lng, place.lat],
+            title: `⏳ ${displayName}`,
+            content: `
+                <div style="
+                    position: relative;
+                    width: 40px;
+                    height: 50px;
+                    cursor: pointer;
+                ">
+                    ${pendingMarkerSvg}
+                </div>
+            `,
+            anchor: 'bottom-center',
+            zIndex: 500
         });
+
+        // 添加点击事件
+        marker.on('click', () => {
+            this.showPlaceModal({
+                name: place.name,
+                address: place.address,
+                lng: place.lng,
+                lat: place.lat,
+                customName: place.customName,
+                notes: place.notes,
+                isPending: true
+            });
+        });
+
+        this.map.add(marker);
+        return marker;
+    }
+
+    // 创建高德地图待定点标签
+    createGaodePendingLabel(place, displayName) {
+        const labelMarker = new AMap.Marker({
+            position: [place.lng, place.lat],
+            content: `
+                <div style="
+                    position: absolute;
+                    background: linear-gradient(135deg, rgba(255,193,7,0.95) 0%, rgba(255,235,59,0.97) 100%);
+                    border: 1px solid rgba(255,193,7,0.9);
+                    border-radius: 8px;
+                    padding: 6px 10px;
+                    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+                    font-size: 12px;
+                    font-weight: 600;
+                    color: #8b5a00;
+                    white-space: nowrap;
+                    box-shadow: 0 4px 12px rgba(0,0,0,0.15), 0 2px 4px rgba(0,0,0,0.1);
+                    backdrop-filter: blur(8px);
+                    text-shadow: 0 1px 2px rgba(255,255,255,0.8);
+                    min-width: 60px;
+                    text-align: center;
+                    cursor: default;
+                    user-select: none;
+                    z-index: 600;
+                    top: -75px;
+                    left: 50%;
+                    transform: translateX(-50%);
+                    pointer-events: none;
+                ">
+                    ⏳ ${displayName}
+                </div>
+            `,
+            anchor: 'bottom-center',
+            zIndex: 600,
+            clickable: false
+        });
+
+        this.map.add(labelMarker);
+        return labelMarker;
     }
 
     // 创建城市过滤按钮
@@ -3024,12 +4676,12 @@ class TravelPlanner {
 
         // 隐藏所有标记（游玩点）
         this.markers.forEach(markerObj => {
-            markerObj.marker.setVisible(false);
+            this.setMarkerVisible(markerObj.marker, false);
         });
 
         // 隐藏所有待定点标记
         this.pendingMarkers.forEach(markerObj => {
-            markerObj.marker.setVisible(false);
+            this.setMarkerVisible(markerObj.marker, false);
         });
 
         // 根据过滤条件显示标记
@@ -3038,12 +4690,12 @@ class TravelPlanner {
         if (this.currentCityFilter === 'all') {
             // 显示所有游玩点标记
             this.markers.forEach(markerObj => {
-                markerObj.marker.setVisible(true);
+                this.setMarkerVisible(markerObj.marker, true);
             });
             // 显示所有待定点标记（如果当前显示待定点）
             if (this.showPendingPlaces) {
                 this.pendingMarkers.forEach(markerObj => {
-                    markerObj.marker.setVisible(true);
+                    this.setMarkerVisible(markerObj.marker, true);
                 });
             }
             visiblePlaces = this.travelList;
@@ -3052,7 +4704,7 @@ class TravelPlanner {
             this.markers.forEach(markerObj => {
                 const city = this.extractCityFromAddress(markerObj.place.address);
                 if (city === this.currentCityFilter) {
-                    markerObj.marker.setVisible(true);
+                    this.setMarkerVisible(markerObj.marker, true);
                     visiblePlaces.push(markerObj.place);
                 }
             });
@@ -3061,7 +4713,7 @@ class TravelPlanner {
                 this.pendingMarkers.forEach(markerObj => {
                     const city = this.extractCityFromAddress(markerObj.place.address);
                     if (city === this.currentCityFilter) {
-                        markerObj.marker.setVisible(true);
+                        this.setMarkerVisible(markerObj.marker, true);
                         if (!visiblePlaces.find(p => p.id === markerObj.place.id)) {
                             visiblePlaces.push(markerObj.place);
                         }
@@ -3084,12 +4736,12 @@ class TravelPlanner {
 
         // 隐藏所有标记（游玩点）
         this.markers.forEach(markerObj => {
-            markerObj.marker.setVisible(false);
+            this.setMarkerVisible(markerObj.marker, false);
         });
 
         // 隐藏所有待定点标记
         this.pendingMarkers.forEach(markerObj => {
-            markerObj.marker.setVisible(false);
+            this.setMarkerVisible(markerObj.marker, false);
         });
 
         // 根据过滤条件显示标记
@@ -3098,12 +4750,12 @@ class TravelPlanner {
         if (this.currentCityFilter === 'all') {
             // 显示所有游玩点标记
             this.markers.forEach(markerObj => {
-                markerObj.marker.setVisible(true);
+                this.setMarkerVisible(markerObj.marker, true);
             });
             // 显示所有待定点标记（如果当前显示待定点）
             if (this.showPendingPlaces) {
                 this.pendingMarkers.forEach(markerObj => {
-                    markerObj.marker.setVisible(true);
+                    this.setMarkerVisible(markerObj.marker, true);
                 });
             }
             visiblePlaces = this.travelList;
@@ -3112,7 +4764,7 @@ class TravelPlanner {
             this.markers.forEach(markerObj => {
                 const city = this.extractCityFromAddress(markerObj.place.address);
                 if (city === this.currentCityFilter) {
-                    markerObj.marker.setVisible(true);
+                    this.setMarkerVisible(markerObj.marker, true);
                     visiblePlaces.push(markerObj.place);
                 }
             });
@@ -3121,7 +4773,7 @@ class TravelPlanner {
                 this.pendingMarkers.forEach(markerObj => {
                     const city = this.extractCityFromAddress(markerObj.place.address);
                     if (city === this.currentCityFilter) {
-                        markerObj.marker.setVisible(true);
+                        this.setMarkerVisible(markerObj.marker, true);
                         if (!visiblePlaces.find(p => p.id === markerObj.place.id)) {
                             visiblePlaces.push(markerObj.place);
                         }
@@ -3177,13 +4829,27 @@ class TravelPlanner {
     recreateMarkers() {
         if (!this.isMapLoaded) return;
 
+        const selectedMapApi = this.settings.selectedMapApi;
+
         // 清除现有标记但不清除路线
-        this.markers.forEach(m => m.marker.setMap(null));
+        this.markers.forEach(m => {
+            if (selectedMapApi === 'google' && typeof google !== 'undefined') {
+                m.marker.setMap(null);
+            } else if (selectedMapApi === 'gaode' && typeof AMap !== 'undefined') {
+                this.map.remove(m.marker);
+            }
+        });
         this.markers = [];
 
         // 清除现有标签
         this.placeLabels.forEach(l => {
-            if (l.label) l.label.setMap(null);
+            if (l.label) {
+                if (selectedMapApi === 'google' && typeof google !== 'undefined') {
+                    l.label.setMap(null);
+                } else if (selectedMapApi === 'gaode' && typeof AMap !== 'undefined') {
+                    this.map.remove(l.label);
+                }
+            }
         });
         this.placeLabels = [];
 
@@ -3206,6 +4872,20 @@ class TravelPlanner {
     fitMapToPlaces(places) {
         if (!this.isMapLoaded || places.length === 0) return;
 
+        const selectedMapApi = this.settings.selectedMapApi;
+        console.log(`📐 调整地图视野：${places.length}个地点，使用${selectedMapApi}`);
+
+        if (selectedMapApi === 'google' && typeof google !== 'undefined') {
+            this.fitMapToPlacesGoogle(places);
+        } else if (selectedMapApi === 'gaode' && typeof AMap !== 'undefined') {
+            this.fitMapToPlacesGaode(places);
+        } else {
+            console.warn('⚠️ 无法调整地图视野：未知的地图API');
+        }
+    }
+
+    // Google Maps 调整视野
+    fitMapToPlacesGoogle(places) {
         if (places.length === 1) {
             // 如果只有一个地点，中心到该地点，使用合适的缩放级别
             this.map.setCenter({ lat: places[0].lat, lng: places[0].lng });
@@ -3226,6 +4906,44 @@ class TravelPlanner {
                     this.map.setZoom(16);
                 }
             });
+        }
+    }
+
+    // 高德地图调整视野
+    fitMapToPlacesGaode(places) {
+        if (places.length === 1) {
+            // 如果只有一个地点，中心到该地点
+            this.map.setCenter([places[0].lng, places[0].lat]);
+            this.map.setZoom(14);
+            console.log(`📍 高德地图居中到单个地点: ${places[0].name}`);
+        } else {
+            // 计算边界
+            let minLat = places[0].lat;
+            let maxLat = places[0].lat;
+            let minLng = places[0].lng;
+            let maxLng = places[0].lng;
+
+            places.forEach(place => {
+                minLat = Math.min(minLat, place.lat);
+                maxLat = Math.max(maxLat, place.lat);
+                minLng = Math.min(minLng, place.lng);
+                maxLng = Math.max(maxLng, place.lng);
+            });
+
+            // 添加边距（扩展10%）
+            const latMargin = (maxLat - minLat) * 0.1;
+            const lngMargin = (maxLng - minLng) * 0.1;
+
+            minLat -= latMargin;
+            maxLat += latMargin;
+            minLng -= lngMargin;
+            maxLng += lngMargin;
+
+            // 设置地图边界
+            const bounds = new AMap.Bounds([minLng, minLat], [maxLng, maxLat]);
+            this.map.setBounds(bounds);
+
+            console.log(`📐 高德地图边界已调整: ${places.length}个地点`);
         }
     }
 
@@ -3367,13 +5085,8 @@ class TravelPlanner {
                     this.drawRoute();
                 }
 
-                // 重置待定点显示状态
-                this.showPendingPlaces = false;
-                const toggleBtn = document.getElementById('togglePendingBtn');
-                if (toggleBtn) {
-                    toggleBtn.textContent = '⏳ 显示待定点';
-                    toggleBtn.title = '显示待定游玩点';
-                }
+                // 更新待定点按钮状态（不重置状态）
+                this.updateTogglePendingButton();
 
                 // 确保城市过滤按钮状态正确
                 this.updateCityFilterButton();
@@ -3646,18 +5359,11 @@ class TravelPlanner {
         this.travelList.forEach(place => this.addMarker(place));
         this.drawRoute();
 
-        // 重置待定点显示状态
-        this.showPendingPlaces = false;
-        const toggleBtn = document.getElementById('togglePendingBtn');
-        if (toggleBtn) {
-            toggleBtn.textContent = '⏳ 显示待定点';
-            toggleBtn.title = '显示待定游玩点';
-        }
+        // 更新待定点按钮状态（不重置状态）
+        this.updateTogglePendingButton();
 
-        // 适配地图视野
-        if (this.travelList.length > 0) {
-            this.fitMapToPlaces(this.travelList);
-        }
+        // 强制更新地图到新方案区域
+        this.updateMapToCurrentScheme();
 
         this.showToast(`已切换到方案"${scheme.name}"`);
         this.closeSaveSchemeModal();
@@ -4213,13 +5919,8 @@ class TravelPlanner {
             this.travelList.forEach(place => this.addMarker(place));
             this.drawRoute();
 
-            // 重置待定点显示状态
-            this.showPendingPlaces = false;
-            const toggleBtn = document.getElementById('togglePendingBtn');
-            if (toggleBtn) {
-                toggleBtn.textContent = '⏳ 显示待定点';
-                toggleBtn.title = '显示待定游玩点';
-            }
+            // 更新待定点按钮状态（不重置状态）
+            this.updateTogglePendingButton();
 
             // 保存数据
             this.saveData();
@@ -5431,24 +7132,33 @@ class TravelPlanner {
 
 // Google Maps API回调函数
 function initMap() {
+    console.log('🌍 Google Maps API回调函数被调用');
     // 初始化应用
     window.app = new TravelPlanner();
+    console.log('📱 TravelPlanner应用实例已创建 (Google Maps)');
 }
+
+// 高德地图不需要回调函数，已在loadGaodeMapScript中直接处理
 
 // 应用初始化（备用方案）
 document.addEventListener('DOMContentLoaded', () => {
     if (!window.app) {
-        // 如果Google Maps还没加载完成，创建一个等待实例
+        // 如果地图API还没加载完成，创建一个等待实例
         window.app = {
             showApiHelp: () => {
-                alert('正在等待Google Maps API加载，请稍候...');
+                alert('正在等待地图API加载，请稍候...');
+            },
+            showSettingsModal: () => {
+                alert('应用正在初始化中，请稍候...');
             },
             locatePlace: () => { },
             removePlaceFromList: () => { }
         };
 
         setTimeout(() => {
-            if (typeof google === 'undefined') {
+            // 如果3秒后还没有完整的应用实例，直接创建一个
+            if (!window.app || !window.app.settings) {
+                console.log('⚠️ 地图API加载超时，创建演示模式应用');
                 window.app = new TravelPlanner();
             }
         }, 3000);
@@ -5458,4 +7168,240 @@ document.addEventListener('DOMContentLoaded', () => {
 // 导出函数供HTML调用
 if (typeof window !== 'undefined') {
     window.initMap = initMap;
+
+    // 导出调试函数
+    window.testGaodeSearch = function (keyword = '北京大学') {
+        console.log('🧪 === 手动测试高德搜索 ===');
+        if (window.app && window.app.searchWithGaode) {
+            window.app.searchWithGaode(keyword);
+        } else {
+            console.error('❌ 应用未初始化或searchWithGaode方法不存在');
+        }
+    };
+
+    window.testGaodeAPI = async function () {
+        console.log('🧪 === 手动测试高德Web服务API ===');
+        if (window.app && window.app.testGaodeAPI) {
+            const result = await window.app.testGaodeAPI();
+            console.log('🧪 测试结果:', result ? '成功' : '失败');
+            return result;
+        } else {
+            console.error('❌ 应用未初始化或testGaodeAPI方法不存在');
+            return false;
+        }
+    };
+
+    window.checkAppStatus = function () {
+        console.log('🔍 === 应用状态检查 ===');
+        console.log('window.app:', !!window.app);
+        if (window.app) {
+            console.log('app.settings:', window.app.settings);
+            console.log('app.isMapLoaded:', window.app.isMapLoaded);
+            console.log('selectedMapApi:', window.app.settings?.selectedMapApi);
+            console.log('google API key:', window.app.getApiKey ? window.app.getApiKey('google') : 'getApiKey方法不存在');
+            console.log('gaode API key:', window.app.getApiKey ? window.app.getApiKey('gaode') : 'getApiKey方法不存在');
+            console.log('bing API key:', window.app.getApiKey ? window.app.getApiKey('bing') : 'getApiKey方法不存在');
+        }
+        console.log('🌍 浏览器fetch支持:', typeof fetch !== 'undefined');
+        console.log('🗺️ AMap对象存在:', typeof AMap !== 'undefined');
+        if (typeof AMap !== 'undefined') {
+            console.log('AMap版本:', AMap.version);
+        }
+    };
+
+    window.testRouteDrawing = function () {
+        console.log('🧪 === 测试路线绘制 ===');
+        if (window.app && window.app.showRoute) {
+            if (window.app.travelList && window.app.travelList.length >= 2) {
+                window.app.showRoute();
+                console.log('✅ 路线绘制命令已执行');
+            } else {
+                console.warn('⚠️ 需要至少2个地点才能绘制路线');
+                console.log('当前地点数量:', window.app.travelList ? window.app.travelList.length : 0);
+            }
+        } else {
+            console.error('❌ 应用未初始化或showRoute方法不存在');
+        }
+    };
+
+    window.testDistanceCalculation = function () {
+        console.log('🧪 === 测试距离计算 ===');
+        if (window.app && window.app.calculateDistances) {
+            if (window.app.travelList && window.app.travelList.length >= 2) {
+                window.app.calculateDistances();
+                console.log('✅ 距离计算命令已执行');
+            } else {
+                console.warn('⚠️ 需要至少2个地点才能计算距离');
+                console.log('当前地点数量:', window.app.travelList ? window.app.travelList.length : 0);
+            }
+        } else {
+            console.error('❌ 应用未初始化或calculateDistances方法不存在');
+        }
+    };
+
+    window.testMarkerCompatibility = function () {
+        console.log('🧪 === 测试Marker兼容性 ===');
+        if (window.app) {
+            try {
+                // 尝试应用城市过滤功能来测试marker兼容性
+                if (window.app.applyCityFilterWithoutFitting) {
+                    window.app.applyCityFilterWithoutFitting();
+                    console.log('✅ Marker兼容性测试通过');
+                    return true;
+                } else {
+                    console.warn('⚠️ applyCityFilterWithoutFitting方法不存在');
+                    return false;
+                }
+            } catch (error) {
+                console.error('❌ Marker兼容性测试失败:', error);
+                return false;
+            }
+        } else {
+            console.error('❌ 应用未初始化');
+            return false;
+        }
+    };
+
+    window.testMapUpdates = function () {
+        console.log('🧪 === 测试地图更新功能 ===');
+        if (window.app) {
+            try {
+                // 测试地图视野调整
+                if (window.app.travelList && window.app.travelList.length > 0) {
+                    console.log('🗺️ 测试地图视野调整...');
+                    const activePlaces = window.app.travelList.filter(place => !place.isPending && place.lat && place.lng);
+                    if (activePlaces.length > 0) {
+                        window.app.fitMapToPlaces(activePlaces);
+                        console.log('✅ 地图视野调整测试完成');
+                    } else {
+                        console.warn('⚠️ 没有有效地点进行测试');
+                    }
+                } else {
+                    console.warn('⚠️ 没有地点数据进行测试');
+                }
+
+                // 测试标记刷新
+                console.log('🔄 测试标记刷新...');
+                window.app.refreshAllMarkers();
+                console.log('✅ 标记刷新测试完成');
+
+                return true;
+            } catch (error) {
+                console.error('❌ 地图更新测试失败:', error);
+                return false;
+            }
+        } else {
+            console.error('❌ 应用未初始化');
+            return false;
+        }
+    };
+
+    window.testShowRoute = function () {
+        console.log('🧪 === 测试显示路线功能 ===');
+        if (window.app && window.app.showRoute) {
+            try {
+                window.app.showRoute();
+                console.log('✅ 显示路线测试完成');
+                return true;
+            } catch (error) {
+                console.error('❌ 显示路线测试失败:', error);
+                return false;
+            }
+        } else {
+            console.error('❌ 应用未初始化或showRoute方法不存在');
+            return false;
+        }
+    };
+
+    window.testGaodeMarkers = function () {
+        console.log('🧪 === 测试高德地图标记功能 ===');
+        if (window.app && window.app.settings.selectedMapApi === 'gaode') {
+            try {
+                console.log('🔄 重新创建标记...');
+                window.app.recreateMarkers();
+
+                console.log('⏳ 测试待定点显示...');
+                if (window.app.travelList.some(place => place.isPending)) {
+                    window.app.showPendingPlaces = true;
+                    window.app.updateTogglePendingButton();
+                } else {
+                    console.warn('⚠️ 没有待定点可供测试');
+                }
+
+                console.log('🏷️ 测试标签切换...');
+                window.app.togglePlaceNames();
+                setTimeout(() => {
+                    window.app.togglePlaceNames();
+                }, 2000);
+
+                console.log('✅ 高德地图标记测试完成');
+                return true;
+            } catch (error) {
+                console.error('❌ 高德地图标记测试失败:', error);
+                return false;
+            }
+        } else {
+            console.warn('⚠️ 当前不是高德地图模式');
+            return false;
+        }
+    };
+
+    window.testGaodeCompatibility = function () {
+        console.log('🧪 === 测试高德地图完整兼容性 ===');
+        if (window.app) {
+            try {
+                const originalApi = window.app.settings.selectedMapApi;
+                console.log(`📋 当前地图API: ${originalApi}`);
+
+                if (originalApi !== 'gaode') {
+                    console.log('⚠️ 当前不是高德地图，建议在设置中切换到高德地图后测试');
+                }
+
+                // 测试标记创建
+                console.log('🎯 测试标记创建...');
+                window.app.recreateMarkers();
+
+                // 测试路线绘制
+                console.log('🛣️ 测试路线绘制...');
+                window.app.drawRoute();
+
+                // 测试地图视野调整
+                console.log('📐 测试地图视野调整...');
+                const activePlaces = window.app.travelList.filter(place => !place.isPending && place.lat && place.lng);
+                if (activePlaces.length > 0) {
+                    window.app.fitMapToPlaces(activePlaces);
+                }
+
+                // 测试标签功能
+                console.log('🏷️ 测试标签功能...');
+                setTimeout(() => {
+                    window.app.togglePlaceNames();
+                    setTimeout(() => {
+                        window.app.togglePlaceNames();
+                    }, 1000);
+                }, 500);
+
+                console.log('✅ 高德地图兼容性测试完成');
+                return true;
+            } catch (error) {
+                console.error('❌ 高德地图兼容性测试失败:', error);
+                return false;
+            }
+        } else {
+            console.error('❌ 应用未初始化');
+            return false;
+        }
+    };
+
+    console.log('🔧 调试函数已加载，您可以在控制台使用：');
+    console.log('  - testGaodeSearch("关键字") : 测试高德Web服务API搜索');
+    console.log('  - testGaodeAPI() : 测试高德Web服务API状态');
+    console.log('  - checkAppStatus() : 检查应用状态');
+    console.log('  - testRouteDrawing() : 测试路线绘制功能');
+    console.log('  - testDistanceCalculation() : 测试距离计算功能');
+    console.log('  - testMarkerCompatibility() : 测试Marker兼容性修复');
+    console.log('  - testMapUpdates() : 测试地图更新和视野调整功能');
+    console.log('  - testShowRoute() : 测试显示路线按钮功能');
+    console.log('  - testGaodeMarkers() : 测试高德地图标记功能');
+    console.log('  - testGaodeCompatibility() : 测试高德地图完整兼容性');
 } 

@@ -232,6 +232,44 @@
                             <p class="panel-description">配置地图服务的API密钥以启用完整功能</p>
                         </div>
                         <div class="panel-content">
+                            <!-- 地图API选择器 -->
+                            <div class="map-api-selector">
+                                <h5>🗺️ 地图显示API选择</h5>
+                                <p class="selector-description">选择用于地图显示的API（即使配置了多个API密钥，也只会使用选择的API）</p>
+                                <div class="api-choice-group">
+                                    <label class="api-choice-option">
+                                        <input type="radio" name="selectedMapApi" value="google" checked>
+                                        <div class="choice-card">
+                                            <div class="choice-icon">🌍</div>
+                                            <div class="choice-info">
+                                                <h6>Google Maps</h6>
+                                                <p>全球覆盖，功能丰富</p>
+                                            </div>
+                                        </div>
+                                    </label>
+                                    <label class="api-choice-option">
+                                        <input type="radio" name="selectedMapApi" value="gaode">
+                                        <div class="choice-card">
+                                            <div class="choice-icon">🗺️</div>
+                                            <div class="choice-info">
+                                                <h6>高德地图</h6>
+                                                <p>中国区域精准</p>
+                                            </div>
+                                        </div>
+                                    </label>
+                                    <label class="api-choice-option">
+                                        <input type="radio" name="selectedMapApi" value="bing">
+                                        <div class="choice-card">
+                                            <div class="choice-icon">🌐</div>
+                                            <div class="choice-info">
+                                                <h6>Bing Maps</h6>
+                                                <p>微软地图服务</p>
+                                            </div>
+                                        </div>
+                                    </label>
+                                </div>
+                            </div>
+
                             <div class="api-keys-config">
                                 <div class="api-key-group">
                                     <label for="googleApiKeyInput">Google Maps API密钥</label>
