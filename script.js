@@ -1862,6 +1862,22 @@ class TravelPlanner {
                     { message: '调整默认地图API为高德地图', type: 'optimize' },
                     { message: '优化设置界面中地图API选项显示顺序', type: 'optimize' }
                 ]
+            },
+            // 1.8.1
+            {
+                updates: [
+                    { message: '优化高德地图导航URI，改善"我的位置"显示效果', type: 'optimize' },
+                    { message: '更新高德地图坐标系为gaode，提高导航精度', type: 'optimize' },
+                    { message: '添加callnative参数，优化地图应用调用体验', type: 'optimize' }
+                ]
+            },
+            // 1.8.2
+            {
+                updates: [
+                    { message: '重构导航功能：高德地图使用动态"我的位置"定位', type: 'optimize' },
+                    { message: '省略from参数，让高德地图自动获取实时位置', type: 'optimize' },
+                    { message: '分离导航逻辑，优化Google和Bing地图导航体验', type: 'optimize' }
+                ]
             }
         ];
 
@@ -2560,22 +2576,64 @@ class TravelPlanner {
 
     // 从当前位置导航到指定地点
     navigateToPlace(lng, lat, name) {
+        // 根据用户设置选择导航应用
+        const navigationApp = this.settings.navigationApp || 'amap';
+        let url = '';
+        let appName = '';
+
+        switch (navigationApp) {
+            case 'amap':
+                // 优化：省略from参数，让高德地图自动获取"我的位置"作为起点
+                url = `https://uri.amap.com/navigation?to=${lng},${lat},${encodeURIComponent(name)}&mode=car&policy=1&src=17travelplanner&coordinate=gaode&callnative=1`;
+                appName = '高德地图';
+                break;
+            case 'google':
+                // Google地图需要获取当前位置
+                this.navigateWithGeolocation(lng, lat, name, 'google');
+                return;
+            case 'bing':
+                // Bing地图需要获取当前位置
+                this.navigateWithGeolocation(lng, lat, name, 'bing');
+                return;
+            default:
+                // 默认使用优化的高德地图URI（省略from参数）
+                url = `https://uri.amap.com/navigation?to=${lng},${lat},${encodeURIComponent(name)}&mode=car&policy=1&src=17travelplanner&coordinate=gaode&callnative=1`;
+                appName = '高德地图';
+                break;
+        }
+
+        // 根据用户偏好设置决定是否在新标签页中打开
+        const openInNewTab = this.settings.preferences?.openInNewTab !== false;
+        const target = openInNewTab ? '_blank' : '_self';
+
+        try {
+            window.open(url, target);
+
+            // 如果用户设置了显示导航提示
+            if (this.settings.preferences?.showNavigationHint !== false) {
+                const targetText = openInNewTab ? '新标签页' : '当前页面';
+                this.showToast(`已在${targetText}中打开${appName}导航到: ${name}`);
+            }
+        } catch (error) {
+            // 备用方案：复制导航链接
+            navigator.clipboard.writeText(url).then(() => {
+                this.showToast(`${appName}导航链接已复制到剪贴板`);
+            });
+        }
+    }
+
+    // 需要获取当前位置的导航方式（Google、Bing等）
+    navigateWithGeolocation(lng, lat, name, navigationApp) {
         if (navigator.geolocation) {
             navigator.geolocation.getCurrentPosition(
                 (position) => {
                     const currentLat = position.coords.latitude;
                     const currentLng = position.coords.longitude;
 
-                    // 根据用户设置选择导航应用
-                    const navigationApp = this.settings.navigationApp || 'amap';
                     let url = '';
                     let appName = '';
 
                     switch (navigationApp) {
-                        case 'amap':
-                            url = `https://uri.amap.com/navigation?from=${currentLng},${currentLat}&to=${lng},${lat}&name=${encodeURIComponent(name)}&coordinate=wgs84&mode=car`;
-                            appName = '高德地图';
-                            break;
                         case 'google':
                             url = `https://www.google.com/maps/dir/${currentLat},${currentLng}/${lat},${lng}`;
                             appName = 'Google 地图';
@@ -2583,10 +2641,6 @@ class TravelPlanner {
                         case 'bing':
                             url = `https://www.bing.com/maps/directions?rtp=pos.${currentLat}_${currentLng}~pos.${lat}_${lng}`;
                             appName = 'Bing 地图';
-                            break;
-                        default:
-                            url = `https://uri.amap.com/navigation?from=${currentLng},${currentLat}&to=${lng},${lat}&name=${encodeURIComponent(name)}&coordinate=wgs84&mode=car`;
-                            appName = '高德地图';
                             break;
                     }
 
