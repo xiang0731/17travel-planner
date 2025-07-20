@@ -238,22 +238,22 @@
                                 <p class="selector-description">选择用于地图显示的API（即使配置了多个API密钥，也只会使用选择的API）</p>
                                 <div class="api-choice-group">
                                     <label class="api-choice-option">
-                                        <input type="radio" name="selectedMapApi" value="google" checked>
-                                        <div class="choice-card">
-                                            <div class="choice-icon">🌍</div>
-                                            <div class="choice-info">
-                                                <h6>Google Maps</h6>
-                                                <p>全球覆盖，功能丰富</p>
-                                            </div>
-                                        </div>
-                                    </label>
-                                    <label class="api-choice-option">
-                                        <input type="radio" name="selectedMapApi" value="gaode">
+                                        <input type="radio" name="selectedMapApi" value="gaode" checked>
                                         <div class="choice-card">
                                             <div class="choice-icon">🗺️</div>
                                             <div class="choice-info">
                                                 <h6>高德地图</h6>
                                                 <p>中国区域精准</p>
+                                            </div>
+                                        </div>
+                                    </label>
+                                    <label class="api-choice-option">
+                                        <input type="radio" name="selectedMapApi" value="google">
+                                        <div class="choice-card">
+                                            <div class="choice-icon">🌍</div>
+                                            <div class="choice-info">
+                                                <h6>Google Maps</h6>
+                                                <p>全球覆盖，功能丰富</p>
                                             </div>
                                         </div>
                                     </label>
@@ -272,6 +272,16 @@
 
                             <div class="api-keys-config">
                                 <div class="api-key-group">
+                                    <label for="gaodeApiKeyInput">高德地图API密钥</label>
+                                    <input type="password" id="gaodeApiKeyInput" placeholder="输入高德地图API Key..."
+                                        maxlength="200">
+                                    <small class="api-hint">
+                                        用于中国大陆地区的地图服务和导航功能
+                                        <br>
+                                        获取方式：访问 <a href="https://console.amap.com/" target="_blank">高德开放平台</a> 申请API密钥
+                                    </small>
+                                </div>
+                                <div class="api-key-group">
                                     <label for="googleApiKeyInput">Google Maps API密钥</label>
                                     <input type="password" id="googleApiKeyInput" placeholder="输入Google Maps API Key..."
                                         maxlength="200">
@@ -280,16 +290,6 @@
                                         <br>
                                         获取方式：访问 <a href="https://console.cloud.google.com/" target="_blank">Google Cloud
                                             Console</a> 创建API密钥
-                                    </small>
-                                </div>
-                                <div class="api-key-group">
-                                    <label for="gaodeApiKeyInput">高德地图API密钥</label>
-                                    <input type="password" id="gaodeApiKeyInput" placeholder="输入高德地图API Key..."
-                                        maxlength="200">
-                                    <small class="api-hint">
-                                        用于中国大陆地区的地图服务和导航功能
-                                        <br>
-                                        获取方式：访问 <a href="https://console.amap.com/" target="_blank">高德开放平台</a> 申请API密钥
                                     </small>
                                 </div>
                                 <div class="api-key-group">

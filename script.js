@@ -42,7 +42,7 @@ class TravelPlanner {
         // 应用设置 - 默认设置
         this.settings = {
             navigationApp: 'amap', // 默认使用高德地图
-            selectedMapApi: 'google', // 默认使用Google Maps作为地图显示API
+            selectedMapApi: 'gaode', // 默认使用高德地图作为地图显示API
             apiKeys: {
                 google: '', // Google Maps API密钥
                 gaode: '', // 高德地图API密钥
@@ -1854,6 +1854,13 @@ class TravelPlanner {
                     { message: '修复"地图API选择功能无法保存"', type: 'fix' },
                     { message: '优化按钮解释文字显示在左侧', type: 'optimize' },
                     { message: '优化版本显示样式，改善内容对齐效果', type: 'optimize' },
+                ]
+            },
+            // 1.8.0
+            {
+                updates: [
+                    { message: '调整默认地图API为高德地图', type: 'optimize' },
+                    { message: '优化设置界面中地图API选项显示顺序', type: 'optimize' }
                 ]
             }
         ];
