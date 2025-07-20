@@ -1856,27 +1856,23 @@ class TravelPlanner {
                     { message: '优化版本显示样式，改善内容对齐效果', type: 'optimize' },
                 ]
             },
-            // 1.8.0
+            // 1.7.1
             {
                 updates: [
                     { message: '调整默认地图API为高德地图', type: 'optimize' },
-                    { message: '优化设置界面中地图API选项显示顺序', type: 'optimize' }
-                ]
-            },
-            // 1.8.1
-            {
-                updates: [
+                    { message: '优化设置界面中地图API选项显示顺序', type: 'optimize' },
                     { message: '优化高德地图导航URI，改善"我的位置"显示效果', type: 'optimize' },
-                    { message: '更新高德地图坐标系为gaode，提高导航精度', type: 'optimize' },
-                    { message: '添加callnative参数，优化地图应用调用体验', type: 'optimize' }
-                ]
-            },
-            // 1.8.2
-            {
-                updates: [
                     { message: '重构导航功能：高德地图使用动态"我的位置"定位', type: 'optimize' },
                     { message: '省略from参数，让高德地图自动获取实时位置', type: 'optimize' },
                     { message: '分离导航逻辑，优化Google和Bing地图导航体验', type: 'optimize' }
+                ]
+            },
+            // 1.8.0
+            {
+                updates: [
+                    { message: '新增"在导航中显示"按钮，支持在地图中查看游玩点位置', type: 'feature' },
+                    { message: '游玩列表和待定列表均支持地图显示功能', type: 'feature' },
+                    { message: '优化按钮布局，将地图显示功能放在第三个位置', type: 'optimize' }
                 ]
             }
         ];
@@ -2289,6 +2285,7 @@ class TravelPlanner {
                     <div class="travel-item-actions">
                         <button class="activate-btn" onclick="app.togglePlaceStatus('${place.id}')" title="移至待定">🎯 游玩</button>
                         ${place.lat && place.lng ? `<button class="action-btn locate-btn" onclick="app.locatePlace(${place.lng}, ${place.lat})" title="在地图上定位">📍</button>` : ''}
+                        ${place.lat && place.lng ? `<button class="action-btn show-in-map-btn" onclick="app.showInMap(${place.lng}, ${place.lat}, '${displayName.replace(/'/g, "\\'")}')" title="在导航中显示">🗺️</button>` : ''}
                         ${place.lat && place.lng ? `<button class="action-btn navigate-to-btn" onclick="app.navigateToPlace(${place.lng}, ${place.lat}, '${displayName.replace(/'/g, "\\'")}')" title="导航到此处">🧭</button>` : ''}
                         <button class="action-btn edit-btn" onclick="app.editPlace('${place.id}')" title="编辑游玩点">✏️</button>
                         <button class="action-btn copy-btn" onclick="app.copyPlaceName('${escapedCustomName || escapedOriginalName}')" title="复制名称">📋</button>
@@ -2399,6 +2396,7 @@ class TravelPlanner {
                     <div class="travel-item-actions">
                         <button class="activate-btn" onclick="app.togglePlaceStatus('${place.id}')" title="移至待定">🎯 游玩</button>
                         ${place.lat && place.lng ? `<button class="action-btn locate-btn" onclick="app.locatePlace(${place.lng}, ${place.lat})" title="在地图上定位">📍</button>` : ''}
+                        ${place.lat && place.lng ? `<button class="action-btn show-in-map-btn" onclick="app.showInMap(${place.lng}, ${place.lat}, '${displayName.replace(/'/g, "\\'")}')" title="在导航中显示">🗺️</button>` : ''}
                         ${place.lat && place.lng ? `<button class="action-btn navigate-to-btn" onclick="app.navigateToPlace(${place.lng}, ${place.lat}, '${displayName.replace(/'/g, "\\'")}')" title="导航到此处">🧭</button>` : ''}
                         <button class="action-btn edit-btn" onclick="app.editPlace('${place.id}')" title="编辑游玩点">✏️</button>
                         <button class="action-btn copy-btn" onclick="app.copyPlaceName('${escapedCustomName || escapedOriginalName}')" title="复制名称">📋</button>
@@ -2440,6 +2438,7 @@ class TravelPlanner {
                     <div class="pending-item-actions">
                         <button class="pending-btn" onclick="app.togglePlaceStatus('${place.id}')" title="加入游玩列表">⏳ 待定</button>
                         ${place.lat && place.lng ? `<button class="action-btn locate-btn" onclick="app.locatePlace(${place.lng}, ${place.lat})" title="在地图上定位">📍</button>` : ''}
+                        ${place.lat && place.lng ? `<button class="action-btn show-in-map-btn" onclick="app.showInMap(${place.lng}, ${place.lat}, '${displayName.replace(/'/g, "\\'")}')" title="在导航中显示">🗺️</button>` : ''}
                         <button class="action-btn edit-btn" onclick="app.editPlace('${place.id}')" title="编辑游玩点">✏️</button>
                         <button class="action-btn copy-btn" onclick="app.copyPlaceName('${escapedCustomName || escapedOriginalName}')" title="复制名称">📋</button>
                         <button class="action-btn copy-btn" onclick="app.copyPlaceAddress('${place.address.replace(/'/g, "\\'")}')" title="复制地址">📄</button>
@@ -2618,6 +2617,56 @@ class TravelPlanner {
             // 备用方案：复制导航链接
             navigator.clipboard.writeText(url).then(() => {
                 this.showToast(`${appName}导航链接已复制到剪贴板`);
+            });
+        }
+    }
+
+    // 在地图中显示游玩点（不进行导航，仅显示位置）
+    showInMap(lng, lat, name) {
+        // 根据用户设置选择地图应用
+        const selectedMapApi = this.settings.selectedMapApi || 'gaode';
+        let url = '';
+        let appName = '';
+
+        switch (selectedMapApi) {
+            case 'gaode':
+                // 高德地图：显示POI点，不进行导航
+                url = `https://uri.amap.com/marker?position=${lng},${lat}&name=${encodeURIComponent(name)}&src=17travelplanner&coordinate=gaode&callnative=1`;
+                appName = '高德地图';
+                break;
+            case 'google':
+                // Google地图：显示位置标记
+                url = `https://www.google.com/maps/search/?api=1&query=${lat},${lng}`;
+                appName = 'Google 地图';
+                break;
+            case 'bing':
+                // Bing地图：显示位置
+                url = `https://www.bing.com/maps?cp=${lat}~${lng}&lvl=16`;
+                appName = 'Bing 地图';
+                break;
+            default:
+                // 默认使用高德地图
+                url = `https://uri.amap.com/marker?position=${lng},${lat}&name=${encodeURIComponent(name)}&src=17travelplanner&coordinate=gaode&callnative=1`;
+                appName = '高德地图';
+                break;
+        }
+
+        // 根据用户偏好设置决定是否在新标签页中打开
+        const openInNewTab = this.settings.preferences?.openInNewTab !== false;
+        const target = openInNewTab ? '_blank' : '_self';
+
+        try {
+            window.open(url, target);
+
+            // 如果用户设置了显示导航提示
+            if (this.settings.preferences?.showNavigationHint !== false) {
+                const targetText = openInNewTab ? '新标签页' : '当前页面';
+                this.showToast(`已在${targetText}中打开${appName}显示: ${name}`);
+            }
+        } catch (error) {
+            // 备用方案：复制地图链接
+            navigator.clipboard.writeText(url).then(() => {
+                this.showToast(`${appName}显示链接已复制到剪贴板`);
             });
         }
     }
