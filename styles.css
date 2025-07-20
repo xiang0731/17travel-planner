@@ -926,9 +926,10 @@ header p {
 .pending-btn[title]::after {
     content: attr(data-tooltip);
     position: absolute;
-    bottom: -30px;
-    left: 50%;
-    transform: translateX(-50%);
+    top: 50%;
+    right: 100%;
+    margin-right: 10px;
+    transform: translateY(-50%);
     background: rgba(0, 0, 0, 0.9);
     color: white;
     padding: 6px 10px;
@@ -3376,20 +3377,6 @@ header p {
     overflow-y: auto;
 }
 
-.version-item {
-    background: #f8f9fa;
-    border-radius: 10px;
-    padding: 16px;
-    margin-bottom: 12px;
-    border-left: 4px solid #667eea;
-    transition: all 0.3s ease;
-}
-
-.version-item:hover {
-    background: #e9ecef;
-    transform: translateX(5px);
-}
-
 .version-header {
     display: flex;
     justify-content: space-between;
@@ -3406,12 +3393,6 @@ header p {
 .version-date {
     color: #7f8c8d;
     font-size: 14px;
-}
-
-.version-changes {
-    display: flex;
-    align-items: center;
-    gap: 8px;
 }
 
 .change-type {
@@ -3443,6 +3424,58 @@ header p {
     line-height: 1.4;
 }
 
+/* 统一版本项样式 */
+.version-item {
+    background: #f8f9fa;
+    border-radius: 10px;
+    padding: 16px;
+    margin-bottom: 12px;
+    border-left: 4px solid #667eea;
+    transition: all 0.3s ease;
+}
+
+.version-item:hover {
+    background: #e9ecef;
+    transform: translateX(5px);
+}
+
+/* 多项更新特殊样式 */
+.version-item.multiple-updates {
+    border-left: 4px solid #3498db;
+    background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%);
+}
+
+.version-item.multiple-updates:hover {
+    background: linear-gradient(135deg, #e9ecef 0%, #dee2e6 100%);
+}
+
+.update-indicator {
+    background: #3498db;
+    color: white;
+    padding: 2px 8px;
+    border-radius: 12px;
+    font-size: 12px;
+    font-weight: 600;
+    margin-left: 8px;
+}
+
+/* 版本内容容器 */
+.version-content {
+    margin-top: 8px;
+}
+
+/* 统一的版本变更项样式 */
+.version-changes {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 8px;
+}
+
+.version-changes:last-child {
+    margin-bottom: 0;
+}
+
 /* 版本详情响应式设计 */
 @media (max-width: 768px) {
     .version-list {
@@ -3469,5 +3502,15 @@ header p {
 
     .change-text {
         font-size: 13px;
+    }
+
+    .update-indicator {
+        font-size: 11px;
+        padding: 2px 6px;
+        margin-left: 4px;
+    }
+
+    .version-content {
+        margin-top: 6px;
     }
 }

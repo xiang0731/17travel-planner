@@ -36,6 +36,9 @@ class TravelPlanner {
         this.showPendingPlaces = false; // 默认不显示待定点
         this.pendingMarkers = []; // 存储待定点标记
 
+        // 地图类型状态管理
+        this.isSatelliteMode = false; // 跟踪当前是否为卫星图模式
+
         // 应用设置 - 默认设置
         this.settings = {
             navigationApp: 'amap', // 默认使用高德地图
@@ -333,7 +336,7 @@ class TravelPlanner {
 
     // 动态加载高德地图脚本
     loadGaodeMapScript(apiKey) {
-        console.log(`🗺️ 开始加载高德地图API，密钥: ${apiKey.substring(0, 8)}...`);
+        console.log(`🗺️ 开始加载高德地图API...`);
 
         // 检查是否已经存在高德地图脚本
         const existingScript = document.querySelector('script[src*="webapi.amap.com"]');
@@ -403,6 +406,11 @@ class TravelPlanner {
         console.log('💾 数据加载完成');
 
         this.updatePageTitle(); // 更新页面标题
+        console.log('📄 页面标题更新完成');
+
+        this.updateVersionInfo(); // 初始化版本信息显示
+        console.log('🔢 版本信息更新完成');
+
         console.log('✅ 应用初始化完成！');
     }
 
@@ -794,6 +802,7 @@ class TravelPlanner {
                 // 延迟绘制路线，确保地图完全加载
                 setTimeout(() => {
                     this.initializeMapContent();
+                    this.updateSatelliteButtonState();
                 }, 500);
             } else {
                 throw new Error('Google Maps API未加载');
@@ -846,6 +855,7 @@ class TravelPlanner {
                 // 延迟绘制路线，确保地图完全加载
                 setTimeout(() => {
                     this.initializeMapContent();
+                    this.updateSatelliteButtonState();
                 }, 500);
 
                 this.showToast('✅ 高德地图加载成功！');
@@ -949,6 +959,46 @@ class TravelPlanner {
         this.updateTogglePendingButton();
 
         console.log('✅ 地图已更新到当前方案区域');
+    }
+
+    // 调整地图视角以显示所有地点（包括游玩点和待定点）
+    fitMapToAllPlaces() {
+        if (!this.isMapLoaded) return;
+
+        // 获取所有有坐标的地点（游玩点和待定点）
+        const allPlacesWithCoords = this.travelList.filter(place =>
+            place.lat && place.lng && !place.isBlank
+        );
+
+        if (allPlacesWithCoords.length === 0) {
+            console.log('📍 没有有坐标的地点，无法调整地图视角');
+            return;
+        }
+
+        // 分离游玩点和待定点
+        const activePlaces = allPlacesWithCoords.filter(place => !place.isPending);
+        const pendingPlaces = allPlacesWithCoords.filter(place => place.isPending);
+
+        console.log(`🗺️ 调整地图视角显示全部地点: ${activePlaces.length}个游玩点 + ${pendingPlaces.length}个待定点`);
+
+        // 使用所有地点来调整地图视角
+        setTimeout(() => {
+            this.fitMapToPlaces(allPlacesWithCoords);
+            console.log('✅ 地图视角已调整为显示全部地点');
+        }, 300);
+    }
+
+    // 更新卫星图按钮状态
+    updateSatelliteButtonState() {
+        const satelliteBtn = document.getElementById('satelliteBtn');
+        if (!satelliteBtn) return;
+
+        // 重置按钮状态为普通图模式
+        this.isSatelliteMode = false;
+        satelliteBtn.textContent = '🛰️ 卫星图';
+        satelliteBtn.title = '切换到卫星图';
+
+        console.log('🔄 卫星图按钮状态已初始化');
     }
 
     // 演示版地图（当没有API时）
@@ -1115,7 +1165,7 @@ class TravelPlanner {
 
         // 检查API密钥
         const apiKey = this.getApiKey('gaode');
-        console.log('🔑 高德API密钥状态:', apiKey ? `已配置 (${apiKey.substring(0, 8)}...)` : '❌ 未配置');
+        console.log('🔑 高德API密钥状态:', apiKey ? '已配置' : '❌ 未配置');
 
         if (!apiKey) {
             console.error('❌ 高德地图API密钥未配置，无法进行搜索');
@@ -1288,7 +1338,7 @@ class TravelPlanner {
             return false;
         }
 
-        console.log('🔑 API密钥:', apiKey.substring(0, 8) + '...');
+        console.log('🔑 API密钥状态: 已配置');
 
         try {
             const testUrl = `https://restapi.amap.com/v3/place/text?key=${apiKey}&keywords=北京&offset=1`;
@@ -1679,64 +1729,133 @@ class TravelPlanner {
         });
     }
 
+    // 获取当前版本号
+    getCurrentVersion() {
+        const versionHistory = this.generateVersionHistory();
+        return versionHistory.length > 0 ? versionHistory[0].version : '1.0.0';
+    }
+
     // 更新版本信息
     updateVersionInfo() {
-        // 根据git提交记录生成的版本更新记录
+        // 基于手动维护的更新记录生成版本历史
         const versionHistory = this.generateVersionHistory();
+        const currentVersion = this.getCurrentVersion();
 
-        // 更新当前版本显示
-        const currentVersionElement = document.querySelector('.current-version h5');
+        // 更新设置面板中的当前版本显示
+        const currentVersionElement = document.querySelector('#current-version-text');
         if (currentVersionElement) {
-            currentVersionElement.textContent = `当前版本：${versionHistory[0].version}`;
+            currentVersionElement.textContent = `当前版本：${currentVersion}`;
+        }
+
+        // 更新页面顶部的版本显示
+        const headerVersionElement = document.querySelector('#header-version');
+        if (headerVersionElement) {
+            headerVersionElement.textContent = `v${currentVersion} - 探索世界，规划你的完美旅程`;
         }
 
         // 更新版本历史列表
         const versionListElement = document.querySelector('.version-list');
         if (versionListElement) {
             let html = '';
-            versionHistory.forEach(item => {
+            let currentVersion = '';
+            let versionItems = [];
+
+            versionHistory.forEach((item, index) => {
                 const changeTypeClass = item.type === 'feature' ? 'feature' :
                     item.type === 'fix' ? 'fix' : 'optimize';
                 const changeTypeText = item.type === 'feature' ? '新增' :
                     item.type === 'fix' ? '修复' : '优化';
 
-                html += `
-                    <div class="version-item">
-                        <div class="version-header">
-                            <span class="version-number">${item.version}</span>
-                        </div>
-                        <div class="version-changes">
-                            <span class="change-type ${changeTypeClass}">${changeTypeText}</span>
-                            <span class="change-text">${item.text}</span>
-                        </div>
-                    </div>
-                `;
+                // 统一处理：收集同一版本的所有更新项
+                if (currentVersion !== item.version) {
+                    // 如果之前有版本项目，先输出它们
+                    if (versionItems.length > 0) {
+                        html += this.generateVersionHtml(currentVersion, versionItems);
+                        versionItems = [];
+                    }
+                    currentVersion = item.version;
+                }
+
+                versionItems.push({
+                    type: item.type,
+                    text: item.text,
+                    changeTypeClass: changeTypeClass,
+                    changeTypeText: changeTypeText
+                });
+
+                // 如果这是最后一项，或者下一项是不同版本
+                const nextItem = versionHistory[index + 1];
+                if (!nextItem || nextItem.version !== item.version) {
+                    html += this.generateVersionHtml(currentVersion, versionItems);
+                    versionItems = [];
+                    currentVersion = '';
+                }
             });
+
             versionListElement.innerHTML = html;
         }
     }
 
-    // 根据git提交记录生成版本历史
+    // 生成版本历史（基于手动维护的更新记录）
     generateVersionHistory() {
-        // 根据实际git提交记录（按时间顺序从旧到新）
-        const gitCommits = [
-            { message: '初版', type: 'feature' },
-            { message: '添加页脚，优化显示策略', type: 'optimize' },
-            { message: '进一步优化显示', type: 'optimize' },
-            { message: '优化导入导出数据，导入时添加验证处理机制', type: 'optimize' },
-            { message: '添加方案重名验证', type: 'feature' },
-            { message: '修复 方案冲突解决 中相同数据不显示的问题', type: 'fix' },
-            { message: '修复 方案冲突解决 界面超出窗口问题', type: 'fix' },
-            { message: '修复 方案冲突解决 界面弹出时异位问题', type: 'fix' },
-            { message: '优化几个界面显示', type: 'optimize' },
-            { message: '添加切换方案时保存提醒', type: 'feature' },
-            { message: '修复页面刷新后不显示当前方案的问题', type: 'fix' },
-            { message: '移除方案覆盖功能', type: 'feature' },
-            { message: '增加方案详情', type: 'feature' },
-            { message: '增加显示/隐藏待定点按钮', type: 'feature' },
-            { message: '新增"添加空白游玩点"功能', type: 'feature' },
-            { message: '修复"编辑空白游玩点时触发距离和时间重计算"的问题', type: 'fix' },
-            { message: '修复：编辑游玩点会触发地图重置视角的问题', type: 'fix' }
+        // 📝 手动版本更新记录管理说明：
+        // 1. 添加新更新：在 updateCommits 数组末尾添加新记录
+        // 2. 版本号自动计算：feature类型递增minor版本，fix/optimize递增patch版本
+        // 3. 统一格式：{ updates: [{ message: '描述', type: 'feature|fix|optimize' }] }
+        // 4. 多项更新：一个版本可包含多个updates，使用相同版本号
+        // 5. 时间顺序：按从旧到新排列，最新的放在数组末尾
+
+        // 手动维护的版本更新记录（按时间顺序从旧到新）
+        // 💡 添加新版本示例：
+        // 单项更新：{ updates: [{ message: '新增XXX功能', type: 'feature' }] }
+        // 多项更新：{ updates: [
+        //     { message: '新增XXX功能', type: 'feature' },
+        //     { message: '修复XXX问题', type: 'fix' }
+        // ]}
+        const updateCommits = [
+            // 1.1.0
+            { updates: [{ message: '初版', type: 'feature' }] },
+            // 1.1.1
+            { updates: [{ message: '添加页脚，优化显示策略', type: 'optimize' }] },
+            // 1.1.2
+            { updates: [{ message: '进一步优化显示', type: 'optimize' }] },
+            // 1.1.3
+            { updates: [{ message: '优化导入导出数据，导入时添加验证处理机制', type: 'optimize' }] },
+            // 1.2.0
+            { updates: [{ message: '添加方案重名验证', type: 'feature' }] },
+            // 1.2.1
+            { updates: [{ message: '修复"方案冲突解决中相同数据不显示"', type: 'fix' }] },
+            // 1.2.2
+            { updates: [{ message: '修复"方案冲突解决界面超出窗口"', type: 'fix' }] },
+            // 1.2.3
+            { updates: [{ message: '修复"方案冲突解决界面弹出时异位"', type: 'fix' }] },
+            // 1.2.4
+            { updates: [{ message: '优化几个界面显示', type: 'optimize' }] },
+            // 1.3.0
+            { updates: [{ message: '添加切换方案时保存提醒', type: 'feature' }] },
+            // 1.3.1
+            { updates: [{ message: '修复"页面刷新后不显示当前方案"', type: 'fix' }] },
+            // 1.3.2
+            { updates: [{ message: '移除方案覆盖功能', type: 'optimize' }] },
+            // 1.4.0
+            { updates: [{ message: '增加方案详情', type: 'feature' }] },
+            // 1.5.0
+            { updates: [{ message: '增加显示/隐藏待定点按钮', type: 'feature' }] },
+            // 1.6.0
+            { updates: [{ message: '新增"添加空白游玩点"功能', type: 'feature' }] },
+            // 1.6.1
+            { updates: [{ message: '修复"编辑空白游玩点时触发距离和时间重计算"', type: 'fix' }] },
+            // 1.6.2
+            { updates: [{ message: '修复"编辑游玩点会触发地图重置视角"', type: 'fix' }] },
+            // 1.7.0
+            {
+                updates: [
+                    { message: '新增高德地图API选择功能', type: 'feature' },
+                    { message: '修复"地图API选择功能无法保存"', type: 'fix' },
+                    { message: '优化按钮解释文字显示在左侧', type: 'optimize' },
+                    { message: '优化版本显示样式，改善内容对齐效果', type: 'optimize' },
+                ]
+            }
         ];
 
         // 版本号生成规则：1.a.b
@@ -1750,30 +1869,74 @@ class TravelPlanner {
 
         const versionHistory = [];
 
-        gitCommits.forEach((commit, index) => {
-            if (commit.type === 'feature') {
-                // 新增功能，增加minor版本
+        updateCommits.forEach((commit, index) => {
+            // 统一处理：所有commit都使用updates数组格式
+            const updates = commit.updates || [];
+
+            // 根据最高优先级的类型确定版本号增长
+            const hasFeature = updates.some(update => update.type === 'feature');
+            const hasFix = updates.some(update => update.type === 'fix');
+            const hasOptimize = updates.some(update => update.type === 'optimize');
+
+            // 版本号增长策略：有feature就增加minor，否则增加patch
+            if (hasFeature) {
                 currentMinor++;
                 minor = currentMinor;
                 patch = 0;
                 currentPatch = 0;
-            } else if (commit.type === 'fix' || commit.type === 'optimize') {
-                // 修复或优化，增加patch版本
+            } else if (hasFix || hasOptimize) {
                 currentPatch++;
                 patch = currentPatch;
             }
 
             const version = `${major}.${minor}.${patch}`;
 
-            versionHistory.push({
-                version: version,
-                type: commit.type,
-                text: commit.message
+            // 为所有更新项创建历史记录，使用相同的版本号
+            updates.forEach((update, updateIndex) => {
+                versionHistory.push({
+                    version: version,
+                    type: update.type,
+                    text: update.message,
+                    isMultiple: updates.length > 1,
+                    updateIndex: updateIndex,
+                    updateTotal: updates.length
+                });
             });
         });
 
         // 按时间倒序排列（最新版本在前）
         return versionHistory.reverse();
+    }
+
+    // 生成版本更新的统一HTML
+    generateVersionHtml(version, versionItems) {
+        if (versionItems.length === 0) return '';
+
+        let changesHtml = '';
+        versionItems.forEach(item => {
+            changesHtml += `
+                <div class="version-changes">
+                    <span class="change-type ${item.changeTypeClass}">${item.changeTypeText}</span>
+                    <span class="change-text">${item.text}</span>
+                </div>
+            `;
+        });
+
+        const isMultiple = versionItems.length > 1;
+        const versionClass = isMultiple ? 'version-item multiple-updates' : 'version-item single-update';
+        const indicator = isMultiple ? `<span class="update-indicator">${versionItems.length}项更新</span>` : '';
+
+        return `
+            <div class="${versionClass}">
+                <div class="version-header">
+                    <span class="version-number">${version}</span>
+                    ${indicator}
+                </div>
+                <div class="version-content">
+                    ${changesHtml}
+                </div>
+            </div>
+        `;
     }
 
 
@@ -2103,10 +2266,10 @@ class TravelPlanner {
                     <div class="travel-item-actions">
                         <button class="activate-btn" onclick="app.togglePlaceStatus('${place.id}')" title="移至待定">🎯 游玩</button>
                         ${place.lat && place.lng ? `<button class="action-btn locate-btn" onclick="app.locatePlace(${place.lng}, ${place.lat})" title="在地图上定位">📍</button>` : ''}
+                        ${place.lat && place.lng ? `<button class="action-btn navigate-to-btn" onclick="app.navigateToPlace(${place.lng}, ${place.lat}, '${displayName.replace(/'/g, "\\'")}')" title="导航到此处">🧭</button>` : ''}
                         <button class="action-btn edit-btn" onclick="app.editPlace('${place.id}')" title="编辑游玩点">✏️</button>
                         <button class="action-btn copy-btn" onclick="app.copyPlaceName('${escapedCustomName || escapedOriginalName}')" title="复制名称">📋</button>
                         <button class="action-btn copy-btn" onclick="app.copyPlaceAddress('${place.address.replace(/'/g, "\\'")}')" title="复制地址">📄</button>
-                        ${place.lat && place.lng ? `<button class="action-btn navigate-to-btn" onclick="app.navigateToPlace(${place.lng}, ${place.lat}, '${displayName.replace(/'/g, "\\'")}')" title="导航到此处">🧭</button>` : ''}
                         <button class="action-btn" onclick="app.removePlaceFromList('${place.id}')" title="删除">✕</button>
                     </div>
                 </li>
@@ -2213,10 +2376,10 @@ class TravelPlanner {
                     <div class="travel-item-actions">
                         <button class="activate-btn" onclick="app.togglePlaceStatus('${place.id}')" title="移至待定">🎯 游玩</button>
                         ${place.lat && place.lng ? `<button class="action-btn locate-btn" onclick="app.locatePlace(${place.lng}, ${place.lat})" title="在地图上定位">📍</button>` : ''}
+                        ${place.lat && place.lng ? `<button class="action-btn navigate-to-btn" onclick="app.navigateToPlace(${place.lng}, ${place.lat}, '${displayName.replace(/'/g, "\\'")}')" title="导航到此处">🧭</button>` : ''}
                         <button class="action-btn edit-btn" onclick="app.editPlace('${place.id}')" title="编辑游玩点">✏️</button>
                         <button class="action-btn copy-btn" onclick="app.copyPlaceName('${escapedCustomName || escapedOriginalName}')" title="复制名称">📋</button>
                         <button class="action-btn copy-btn" onclick="app.copyPlaceAddress('${place.address.replace(/'/g, "\\'")}')" title="复制地址">📄</button>
-                        ${place.lat && place.lng ? `<button class="action-btn navigate-to-btn" onclick="app.navigateToPlace(${place.lng}, ${place.lat}, '${displayName.replace(/'/g, "\\'")}')" title="导航到此处">🧭</button>` : ''}
                         <button class="action-btn" onclick="app.removePlaceFromList('${place.id}')" title="删除">✕</button>
                     </div>
                 </li>
@@ -3227,7 +3390,8 @@ class TravelPlanner {
             this.restoreMarkers();
             clearBtn.innerHTML = '🗑️ 清除标记';
             clearBtn.title = '清除地图标记';
-            this.showToast('已恢复标记');
+            const activeCount = this.travelList.filter(place => !place.isPending && place.lat && place.lng && !place.isBlank).length;
+            this.showToast(`已恢复标记并调整视角显示${activeCount}个游玩点`);
         } else {
             // 清除标记
             this.saveMarkersState();
@@ -3314,9 +3478,13 @@ class TravelPlanner {
             this.drawRoute();
         }
 
-        // 重新适配地图视野
-        if (this.travelList.length > 0) {
-            this.fitMapToPlaces(this.travelList);
+        // 重新适配地图视野，只显示游玩点区域
+        const currentActivePlaces = this.travelList.filter(place => !place.isPending && place.lat && place.lng && !place.isBlank);
+        if (currentActivePlaces.length > 0) {
+            setTimeout(() => {
+                this.fitMapToPlaces(currentActivePlaces);
+                console.log(`✅ 已恢复标记并调整视角显示${currentActivePlaces.length}个游玩点`);
+            }, 300);
         }
     }
 
@@ -4137,27 +4305,73 @@ class TravelPlanner {
         const satelliteBtn = document.getElementById('satelliteBtn');
 
         if (selectedMapApi === 'google' && typeof google !== 'undefined') {
-            const currentType = this.map.getMapTypeId();
-            if (currentType === google.maps.MapTypeId.SATELLITE) {
+            // Google Maps 切换
+            if (this.isSatelliteMode) {
                 this.map.setMapTypeId(google.maps.MapTypeId.ROADMAP);
                 satelliteBtn.textContent = '🛰️ 卫星图';
+                satelliteBtn.title = '切换到卫星图';
+                this.isSatelliteMode = false;
+                this.showToast('已切换到普通地图');
             } else {
                 this.map.setMapTypeId(google.maps.MapTypeId.SATELLITE);
                 satelliteBtn.textContent = '🗺️ 普通图';
+                satelliteBtn.title = '切换到普通图';
+                this.isSatelliteMode = true;
+                this.showToast('已切换到卫星图');
             }
         } else if (selectedMapApi === 'gaode' && typeof AMap !== 'undefined') {
-            // 高德地图切换卫星图层
-            const currentLayers = this.map.getLayers();
-            const hasSatellite = currentLayers.some(layer => layer.CLASS_NAME === 'AMap.TileLayer.Satellite');
+            // 高德地图切换 - 使用图层方式
+            console.log(`🗺️ 高德地图切换卫星图 - 当前模式: ${this.isSatelliteMode ? '卫星图' : '普通图'}`);
 
-            if (hasSatellite) {
-                // 切换回普通地图
-                this.map.setMapStyle('amap://styles/normal');
-                satelliteBtn.textContent = '🛰️ 卫星图';
-            } else {
-                // 切换到卫星图
-                this.map.setMapStyle('amap://styles/satellite');
-                satelliteBtn.textContent = '🗺️ 普通图';
+            try {
+                if (this.isSatelliteMode) {
+                    // 切换回普通地图
+                    console.log('🔄 切换到普通地图...');
+
+                    // 立即更新按钮提供视觉反馈
+                    satelliteBtn.textContent = '🛰️ 卫星图';
+                    satelliteBtn.title = '切换到卫星图';
+
+                    // 使用标准图层
+                    const standardLayer = new AMap.TileLayer();
+                    this.map.setLayers([standardLayer]);
+                    this.isSatelliteMode = false;
+
+                    setTimeout(() => {
+                        this.showToast('已切换到普通地图');
+                        console.log('✅ 普通地图切换完成');
+                    }, 200);
+                } else {
+                    // 切换到卫星图
+                    console.log('🔄 切换到卫星图...');
+
+                    // 立即更新按钮提供视觉反馈
+                    satelliteBtn.textContent = '🗺️ 普通图';
+                    satelliteBtn.title = '切换到普通图';
+
+                    // 使用卫星图层
+                    const satelliteLayer = new AMap.TileLayer.Satellite();
+                    this.map.setLayers([satelliteLayer]);
+                    this.isSatelliteMode = true;
+
+                    setTimeout(() => {
+                        this.showToast('已切换到卫星图');
+                        console.log('✅ 卫星图切换完成');
+                    }, 200);
+                }
+            } catch (error) {
+                console.error('❌ 高德地图图层切换失败:', error);
+
+                // 回滚按钮状态
+                if (this.isSatelliteMode) {
+                    satelliteBtn.textContent = '🗺️ 普通图';
+                    satelliteBtn.title = '切换到普通图';
+                } else {
+                    satelliteBtn.textContent = '🛰️ 卫星图';
+                    satelliteBtn.title = '切换到卫星图';
+                }
+
+                this.showToast('❌ 地图类型切换失败');
             }
         } else {
             this.showToast('⚠️ 当前地图API不支持卫星图切换');
@@ -4245,7 +4459,7 @@ class TravelPlanner {
             }
         } else {
             toggleBtn.textContent = '⏳ 显示待定点';
-            toggleBtn.title = '显示待定游玩点';
+            toggleBtn.title = '在地图上显示待定游玩点';
             // 如果当前隐藏待定点，清除待定点标记
             if (this.isMapLoaded) {
                 this.clearPendingMarkers();
@@ -4268,12 +4482,16 @@ class TravelPlanner {
             toggleBtn.textContent = '⏳ 隐藏待定点';
             toggleBtn.title = '隐藏待定游玩点';
             const pendingCount = this.travelList.filter(place => place.isPending).length;
-            this.showToast(`已显示 ${pendingCount} 个待定点`);
+
+            // 调整地图视角以显示所有地点（游玩点和待定点）
+            this.fitMapToAllPlaces();
+
+            this.showToast(`已显示 ${pendingCount} 个待定点并调整地图视角`);
         } else {
             // 隐藏待定点
             this.clearPendingMarkers();
             toggleBtn.textContent = '⏳ 显示待定点';
-            toggleBtn.title = '显示待定游玩点';
+            toggleBtn.title = '在地图上显示待定游玩点';
             // 强制应用城市过滤以确保所有待定点都被隐藏（但不调整地图视角）
             this.applyCityFilterWithoutFitting();
             this.showToast('已隐藏待定点');
@@ -7198,9 +7416,9 @@ if (typeof window !== 'undefined') {
             console.log('app.settings:', window.app.settings);
             console.log('app.isMapLoaded:', window.app.isMapLoaded);
             console.log('selectedMapApi:', window.app.settings?.selectedMapApi);
-            console.log('google API key:', window.app.getApiKey ? window.app.getApiKey('google') : 'getApiKey方法不存在');
-            console.log('gaode API key:', window.app.getApiKey ? window.app.getApiKey('gaode') : 'getApiKey方法不存在');
-            console.log('bing API key:', window.app.getApiKey ? window.app.getApiKey('bing') : 'getApiKey方法不存在');
+            console.log('google API key状态:', window.app.getApiKey ? (window.app.getApiKey('google') ? '已配置' : '未配置') : 'getApiKey方法不存在');
+            console.log('gaode API key状态:', window.app.getApiKey ? (window.app.getApiKey('gaode') ? '已配置' : '未配置') : 'getApiKey方法不存在');
+            console.log('bing API key状态:', window.app.getApiKey ? (window.app.getApiKey('bing') ? '已配置' : '未配置') : 'getApiKey方法不存在');
         }
         console.log('🌍 浏览器fetch支持:', typeof fetch !== 'undefined');
         console.log('🗺️ AMap对象存在:', typeof AMap !== 'undefined');
@@ -7313,6 +7531,116 @@ if (typeof window !== 'undefined') {
         }
     };
 
+    window.testPendingPlacesView = function () {
+        console.log('🧪 === 测试待定点视角调整功能 ===');
+        if (window.app) {
+            try {
+                const pendingCount = window.app.travelList.filter(place => place.isPending).length;
+                const activeCount = window.app.travelList.filter(place => !place.isPending && place.lat && place.lng).length;
+
+                console.log(`📊 当前状态: ${activeCount}个游玩点, ${pendingCount}个待定点`);
+
+                if (pendingCount === 0) {
+                    console.warn('⚠️ 没有待定点可供测试，建议先将一些地点设置为待定状态');
+                    return false;
+                }
+
+                console.log('👀 测试显示待定点并调整视角...');
+
+                // 首先确保待定点是隐藏的
+                if (window.app.showPendingPlaces) {
+                    window.app.togglePendingPlaces(); // 先隐藏
+                    setTimeout(() => {
+                        window.app.togglePendingPlaces(); // 再显示，触发视角调整
+                        console.log('✅ 待定点视角调整测试完成');
+                    }, 500);
+                } else {
+                    window.app.togglePendingPlaces(); // 直接显示，触发视角调整
+                    console.log('✅ 待定点视角调整测试完成');
+                }
+
+                return true;
+            } catch (error) {
+                console.error('❌ 待定点视角调整测试失败:', error);
+                return false;
+            }
+        } else {
+            console.error('❌ 应用未初始化');
+            return false;
+        }
+    };
+
+    window.testSatelliteToggle = function () {
+        console.log('🧪 === 测试卫星图切换功能 ===');
+        if (window.app && window.app.isMapLoaded) {
+            try {
+                const selectedMapApi = window.app.settings.selectedMapApi;
+                console.log(`📍 当前地图API: ${selectedMapApi}`);
+                console.log(`🗺️ 当前模式: ${window.app.isSatelliteMode ? '卫星图' : '普通图'}`);
+
+                console.log('🔄 测试切换到卫星图...');
+                if (!window.app.isSatelliteMode) {
+                    window.app.toggleSatellite();
+                }
+
+                setTimeout(() => {
+                    console.log('🔄 测试切换回普通图...');
+                    if (window.app.isSatelliteMode) {
+                        window.app.toggleSatellite();
+                    }
+                    console.log('✅ 卫星图切换测试完成');
+                }, 2000);
+
+                return true;
+            } catch (error) {
+                console.error('❌ 卫星图切换测试失败:', error);
+                return false;
+            }
+        } else {
+            console.error('❌ 地图未初始化或应用未加载');
+            return false;
+        }
+    };
+
+    window.testMarkerToggle = function () {
+        console.log('🧪 === 测试标记清除和恢复功能 ===');
+        if (window.app && window.app.isMapLoaded) {
+            try {
+                const activeCount = window.app.travelList.filter(place => !place.isPending && place.lat && place.lng && !place.isBlank).length;
+                const pendingCount = window.app.travelList.filter(place => place.isPending).length;
+
+                console.log(`📊 当前状态: ${activeCount}个游玩点, ${pendingCount}个待定点`);
+
+                if (activeCount === 0) {
+                    console.warn('⚠️ 没有游玩点可供测试，建议先添加一些地点');
+                    return false;
+                }
+
+                console.log('🗑️ 测试清除标记...');
+                if (!window.app.markersCleared) {
+                    window.app.toggleMarkers(); // 清除标记
+                }
+
+                setTimeout(() => {
+                    console.log('↩️ 测试恢复标记并调整视角...');
+                    if (window.app.markersCleared) {
+                        window.app.toggleMarkers(); // 恢复标记
+                    }
+                    console.log('✅ 标记切换测试完成');
+                    console.log(`📋 验证：恢复标记时地图视角应该调整为只显示${activeCount}个游玩点区域`);
+                }, 2000);
+
+                return true;
+            } catch (error) {
+                console.error('❌ 标记切换测试失败:', error);
+                return false;
+            }
+        } else {
+            console.error('❌ 地图未初始化或应用未加载');
+            return false;
+        }
+    };
+
     window.testGaodeMarkers = function () {
         console.log('🧪 === 测试高德地图标记功能 ===');
         if (window.app && window.app.settings.selectedMapApi === 'gaode') {
@@ -7402,6 +7730,9 @@ if (typeof window !== 'undefined') {
     console.log('  - testMarkerCompatibility() : 测试Marker兼容性修复');
     console.log('  - testMapUpdates() : 测试地图更新和视野调整功能');
     console.log('  - testShowRoute() : 测试显示路线按钮功能');
+    console.log('  - testPendingPlacesView() : 测试待定点视角调整功能');
+    console.log('  - testSatelliteToggle() : 测试卫星图切换功能');
+    console.log('  - testMarkerToggle() : 测试标记清除和恢复功能');
     console.log('  - testGaodeMarkers() : 测试高德地图标记功能');
     console.log('  - testGaodeCompatibility() : 测试高德地图完整兼容性');
 } 
