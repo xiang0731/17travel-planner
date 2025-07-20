@@ -1862,6 +1862,22 @@ class TravelPlanner {
                     { message: '调整默认地图API为高德地图', type: 'optimize' },
                     { message: '优化设置界面中地图API选项显示顺序', type: 'optimize' }
                 ]
+            },
+            // 1.9.0
+            {
+                updates: [
+                    { message: '重新整理项目文档结构', type: 'feature' },
+                    { message: '创建详细的使用教程TUTORIAL.md', type: 'feature' },
+                    { message: '整合API配置说明到教程中', type: 'optimize' },
+                    { message: '简化README.md，提高可读性', type: 'optimize' }
+                ]
+            },
+            // 1.9.1
+            {
+                updates: [
+                    { message: '合并版本管理说明到README.md', type: 'optimize' },
+                    { message: '进一步简化文档结构', type: 'optimize' }
+                ]
             }
         ];
 
