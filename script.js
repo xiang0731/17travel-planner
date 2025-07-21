@@ -1872,7 +1872,14 @@ class TravelPlanner {
                 updates: [
                     { message: '新增"在导航中显示"按钮，支持在地图中查看游玩点位置', type: 'feature' },
                     { message: '游玩列表和待定列表均支持地图显示功能', type: 'feature' },
-                    { message: '优化按钮布局，将地图显示功能放在第三个位置', type: 'optimize' }
+                ]
+            },
+            // 1.8.1
+            {
+                updates: [
+                    { message: '优化导航功能：桌面设备使用浏览器定位，移动设备使用地图应用定位', type: 'optimize' },
+                    { message: '修复电脑端高德导航起点丢失问题', type: 'fix' },
+                    { message: '新增设备类型智能检测，自动选择最优导航策略', type: 'feature' }
                 ]
             }
         ];
@@ -2573,34 +2580,52 @@ class TravelPlanner {
         });
     }
 
+    // 检测是否为移动设备
+    isMobileDevice() {
+        return /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent) ||
+            (navigator.maxTouchPoints && navigator.maxTouchPoints > 2 && /MacIntel/.test(navigator.platform));
+    }
+
     // 从当前位置导航到指定地点
     navigateToPlace(lng, lat, name) {
         // 根据用户设置选择导航应用
         const navigationApp = this.settings.navigationApp || 'amap';
-        let url = '';
-        let appName = '';
+        const isMobile = this.isMobileDevice();
 
         switch (navigationApp) {
             case 'amap':
-                // 优化：省略from参数，让高德地图自动获取"我的位置"作为起点
-                url = `https://uri.amap.com/navigation?to=${lng},${lat},${encodeURIComponent(name)}&mode=car&policy=1&src=17travelplanner&coordinate=gaode&callnative=1`;
-                appName = '高德地图';
+                if (isMobile) {
+                    // 移动设备：省略from参数，让高德地图自动获取"我的位置"作为起点
+                    const url = `https://uri.amap.com/navigation?to=${lng},${lat},${encodeURIComponent(name)}&mode=car&policy=1&src=17travelplanner&coordinate=gaode&callnative=1`;
+                    this.openNavigationUrl(url, '高德地图', name);
+                } else {
+                    // 桌面设备：使用浏览器获取位置，避免起点丢失
+                    this.navigateWithGeolocation(lng, lat, name, 'amap');
+                }
                 break;
             case 'google':
                 // Google地图需要获取当前位置
                 this.navigateWithGeolocation(lng, lat, name, 'google');
-                return;
+                break;
             case 'bing':
                 // Bing地图需要获取当前位置
                 this.navigateWithGeolocation(lng, lat, name, 'bing');
-                return;
+                break;
             default:
-                // 默认使用优化的高德地图URI（省略from参数）
-                url = `https://uri.amap.com/navigation?to=${lng},${lat},${encodeURIComponent(name)}&mode=car&policy=1&src=17travelplanner&coordinate=gaode&callnative=1`;
-                appName = '高德地图';
+                if (isMobile) {
+                    // 移动设备：默认使用优化的高德地图URI（省略from参数）
+                    const url = `https://uri.amap.com/navigation?to=${lng},${lat},${encodeURIComponent(name)}&mode=car&policy=1&src=17travelplanner&coordinate=gaode&callnative=1`;
+                    this.openNavigationUrl(url, '高德地图', name);
+                } else {
+                    // 桌面设备：使用浏览器获取位置
+                    this.navigateWithGeolocation(lng, lat, name, 'amap');
+                }
                 break;
         }
+    }
 
+    // 打开导航URL的通用方法
+    openNavigationUrl(url, appName, placeName) {
         // 根据用户偏好设置决定是否在新标签页中打开
         const openInNewTab = this.settings.preferences?.openInNewTab !== false;
         const target = openInNewTab ? '_blank' : '_self';
@@ -2611,7 +2636,7 @@ class TravelPlanner {
             // 如果用户设置了显示导航提示
             if (this.settings.preferences?.showNavigationHint !== false) {
                 const targetText = openInNewTab ? '新标签页' : '当前页面';
-                this.showToast(`已在${targetText}中打开${appName}导航到: ${name}`);
+                this.showToast(`已在${targetText}中打开${appName}导航到: ${placeName}`);
             }
         } catch (error) {
             // 备用方案：复制导航链接
@@ -2671,7 +2696,7 @@ class TravelPlanner {
         }
     }
 
-    // 需要获取当前位置的导航方式（Google、Bing等）
+    // 需要获取当前位置的导航方式（高德桌面版、Google、Bing等）
     navigateWithGeolocation(lng, lat, name, navigationApp) {
         if (navigator.geolocation) {
             navigator.geolocation.getCurrentPosition(
@@ -2683,6 +2708,11 @@ class TravelPlanner {
                     let appName = '';
 
                     switch (navigationApp) {
+                        case 'amap':
+                            // 高德地图桌面版：包含from参数，避免起点丢失
+                            url = `https://uri.amap.com/navigation?from=${currentLng},${currentLat},我的位置&to=${lng},${lat},${encodeURIComponent(name)}&mode=car&policy=1&src=17travelplanner&coordinate=gaode&callnative=1`;
+                            appName = '高德地图';
+                            break;
                         case 'google':
                             url = `https://www.google.com/maps/dir/${currentLat},${currentLng}/${lat},${lng}`;
                             appName = 'Google 地图';
