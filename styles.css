@@ -2310,6 +2310,8 @@ header p {
     margin: 0;
     max-width: 900px;
     width: 90vw;
+    height: 650px;
+    /* 固定高度，统一所有设置面板尺寸 */
     max-height: 85vh;
     display: flex;
     flex-direction: column;
@@ -2394,7 +2396,9 @@ header p {
     flex: 1;
     padding: 20px;
     overflow-y: auto;
-    max-height: calc(80vh - 160px);
+    height: 550px;
+    /* 固定高度：总高度650px - 顶部间距和按钮区域约100px */
+    max-height: 550px;
 }
 
 .settings-panel.active {
@@ -2812,6 +2816,8 @@ header p {
     .settings-modal-content,
     .unified-modal-content {
         width: 95vw !important;
+        height: 580px !important;
+        /* 移动端固定高度，比桌面端稍小 */
         max-height: 90vh !important;
     }
 
@@ -2855,7 +2861,9 @@ header p {
 
     .settings-panel {
         padding: 15px !important;
-        max-height: calc(90vh - 200px) !important;
+        height: 460px !important;
+        /* 移动端固定高度：总高度580px - 导航和按钮区域约120px */
+        max-height: 460px !important;
     }
 
     .panel-header h4 {
@@ -3373,8 +3381,7 @@ header p {
 }
 
 .version-list {
-    max-height: 400px;
-    overflow-y: auto;
+    /* 移除独立滚动条，使用外层统一滚动 */
 }
 
 .version-header {
@@ -3479,7 +3486,7 @@ header p {
 /* 版本详情响应式设计 */
 @media (max-width: 768px) {
     .version-list {
-        max-height: 300px;
+        /* 移动端也使用外层统一滚动，无需独立滚动 */
     }
 
     .version-item {

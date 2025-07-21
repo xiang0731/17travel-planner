@@ -1881,6 +1881,15 @@ class TravelPlanner {
                     { message: '修复电脑端高德导航起点丢失问题', type: 'fix' },
                     { message: '新增设备类型智能检测，自动选择最优导航策略', type: 'feature' }
                 ]
+            },
+            // 1.8.2
+            {
+                updates: [
+                    { message: '统一设置窗口尺寸，修复切换菜单时窗口大小变化问题', type: 'fix' },
+                    { message: '设置固定窗口高度，以版本详情面板为标准统一所有面板尺寸', type: 'optimize' },
+                    { message: '优化移动端设置界面尺寸适配', type: 'optimize' },
+                    { message: '修复版本详情面板双滚动条问题，统一使用外层滚动条', type: 'fix' }
+                ]
             }
         ];
 
