@@ -649,6 +649,89 @@ class TravelPlanner {
         document.querySelector('#editPlaceModal .close').addEventListener('click', () => this.closeEditPlaceModal());
         document.getElementById('saveEditBtn').addEventListener('click', () => this.saveEditPlace());
         document.getElementById('cancelEditBtn').addEventListener('click', () => this.closeEditPlaceModal());
+
+        // 移动端紧凑模式
+        this.setupMobileCompactMode();
+    }
+
+    // 设置移动端紧凑模式
+    setupMobileCompactMode() {
+        const compactModeBtn = document.getElementById('compactModeBtn');
+        const compactToggleFloating = document.getElementById('compactToggleFloating');
+
+        // 检测是否为移动设备
+        const isMobile = () => {
+            return window.innerWidth <= 768 ||
+                /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+        };
+
+        // 更新按钮显示状态
+        const updateButtonVisibility = () => {
+            if (isMobile()) {
+                compactModeBtn.style.display = 'inline-block';
+            } else {
+                compactModeBtn.style.display = 'none';
+                // 如果不是移动设备，确保退出紧凑模式
+                if (document.body.classList.contains('mobile-compact-mode')) {
+                    this.toggleMobileCompactMode(false);
+                }
+            }
+        };
+
+        // 切换紧凑模式
+        this.toggleMobileCompactMode = (enable) => {
+            if (enable === undefined) {
+                enable = !document.body.classList.contains('mobile-compact-mode');
+            }
+
+            if (enable) {
+                document.body.classList.add('mobile-compact-mode');
+                compactModeBtn.classList.add('active');
+                compactModeBtn.innerHTML = '✅ 紧凑';
+                compactModeBtn.title = '紧凑模式已启用';
+                compactToggleFloating.style.display = 'block';
+
+                // 保存紧凑模式状态
+                localStorage.setItem('mobileCompactMode', 'true');
+
+                this.showToast('🎯 已启用紧凑模式，获得更多显示空间');
+            } else {
+                document.body.classList.remove('mobile-compact-mode');
+                compactModeBtn.classList.remove('active');
+                compactModeBtn.innerHTML = '📱 紧凑';
+                compactModeBtn.title = '紧凑模式';
+                compactToggleFloating.style.display = 'none';
+
+                // 清除紧凑模式状态
+                localStorage.removeItem('mobileCompactMode');
+
+                this.showToast('📱 已退出紧凑模式');
+            }
+        };
+
+        // 绑定事件监听器
+        if (compactModeBtn) {
+            compactModeBtn.addEventListener('click', () => {
+                this.toggleMobileCompactMode();
+            });
+        }
+
+        if (compactToggleFloating) {
+            compactToggleFloating.addEventListener('click', () => {
+                this.toggleMobileCompactMode(false);
+            });
+        }
+
+        // 窗口大小变化时更新按钮显示
+        window.addEventListener('resize', updateButtonVisibility);
+
+        // 初始化时更新按钮显示
+        updateButtonVisibility();
+
+        // 恢复之前的紧凑模式状态
+        if (isMobile() && localStorage.getItem('mobileCompactMode') === 'true') {
+            this.toggleMobileCompactMode(true);
+        }
     }
 
     // 初始化Google地图
@@ -1890,6 +1973,33 @@ class TravelPlanner {
                     { message: '优化移动端设置界面尺寸适配', type: 'optimize' },
                     { message: '修复版本详情面板双滚动条问题，统一使用外层滚动条', type: 'fix' }
                 ]
+            },
+            // 1.9.0
+            {
+                updates: [
+                    { message: '新增移动端紧凑模式，隐藏页头页脚获得更多显示空间', type: 'feature' },
+                    { message: '缩小移动端字体和间距，优化空间利用率', type: 'optimize' },
+                    { message: '添加浮动切换按钮，便于退出紧凑模式', type: 'feature' },
+                    { message: '支持紧凑模式状态记忆，重新访问时自动恢复', type: 'feature' }
+                ]
+            },
+            // 1.9.1
+            {
+                updates: [
+                    { message: '进一步优化紧凑模式字体和布局，最大化空间利用', type: 'optimize' },
+                    { message: '大幅缩小地图控制按钮和图例尺寸，节省更多显示空间', type: 'optimize' },
+                    { message: '优化游玩列表空间比例，从42vh调整为40vh', type: 'optimize' },
+                    { message: '全面优化搜索结果、路线卡片等所有界面元素尺寸', type: 'optimize' }
+                ]
+            },
+            // 1.9.2
+            {
+                updates: [
+                    { message: '修复紧凑模式下Toast消息占用整屏问题', type: 'fix' },
+                    { message: '优化Toast位置为底部居中显示，限制最大宽度200px', type: 'optimize' },
+                    { message: '新增消息简化系统，紧凑模式下显示更简短的提示', type: 'feature' },
+                    { message: '缩短紧凑模式下Toast显示时间，减少界面干扰', type: 'optimize' }
+                ]
             }
         ];
 
@@ -2762,10 +2872,18 @@ class TravelPlanner {
 
     // 显示提示消息
     showToast(message) {
+        // 检查是否为紧凑模式，如果是则简化消息
+        const isCompactMode = document.body.classList.contains('mobile-compact-mode');
+        let displayMessage = message;
+
+        if (isCompactMode) {
+            displayMessage = this.simplifyToastMessage(message);
+        }
+
         // 创建toast元素
         const toast = document.createElement('div');
         toast.className = 'toast';
-        toast.textContent = message;
+        toast.textContent = displayMessage;
 
         // 添加到页面
         document.body.appendChild(toast);
@@ -2775,7 +2893,8 @@ class TravelPlanner {
             toast.classList.add('show');
         }, 100);
 
-        // 3秒后自动隐藏
+        // 紧凑模式下缩短显示时间
+        const displayTime = isCompactMode ? 2000 : 3000;
         setTimeout(() => {
             toast.classList.remove('show');
             setTimeout(() => {
@@ -2783,7 +2902,66 @@ class TravelPlanner {
                     document.body.removeChild(toast);
                 }
             }, 300);
-        }, 3000);
+        }, displayTime);
+    }
+
+    // 简化Toast消息（紧凑模式专用）
+    simplifyToastMessage(message) {
+        const simplifications = {
+            '🎯 已启用紧凑模式，获得更多显示空间': '✅ 紧凑模式',
+            '📱 已退出紧凑模式': '❌ 退出紧凑',
+            '已在新标签页中打开': '✅ 已打开',
+            '已在当前页面中打开': '✅ 已打开',
+            '导航链接已复制到剪贴板': '📋 已复制',
+            '显示链接已复制到剪贴板': '📋 已复制',
+            '✅ 已定位到您的位置': '📍 已定位',
+            '已复制地点名称': '📋 已复制',
+            '已复制地址': '📋 已复制',
+            '已切换到普通地图': '🗺️ 普通图',
+            '已切换到卫星图': '🛰️ 卫星图',
+            '已显示地点名称': '🏷️ 显示名称',
+            '已隐藏地点名称': '🏷️ 隐藏名称',
+            '已显示待定点': '⏳ 显示待定',
+            '已隐藏待定点': '⏳ 隐藏待定',
+            '设置已保存': '✅ 已保存',
+            '至少需要2个有效地点才能显示路线': '⚠️ 需要2+地点',
+            '请先添加一些游玩地点再导出': '⚠️ 先添加地点'
+        };
+
+        // 优先匹配完整消息
+        if (simplifications[message]) {
+            return simplifications[message];
+        }
+
+        // 处理包含动态内容的消息
+        if (message.includes('已更新游玩点：')) {
+            return '✅ 已更新';
+        }
+        if (message.includes('已移至待定列表')) {
+            return '⏳ 移至待定';
+        }
+        if (message.includes('已加入游玩列表')) {
+            return '✅ 已加入';
+        }
+        if (message.includes('已显示') && message.includes('个地点的完整路线')) {
+            return '🛣️ 已显示路线';
+        }
+        if (message.includes('已显示') && message.includes('个待定点')) {
+            return '⏳ 显示待定';
+        }
+        if (message.includes('导航到')) {
+            return '🧭 导航中';
+        }
+        if (message.includes('显示:')) {
+            return '🗺️ 已显示';
+        }
+
+        // 如果消息太长，截断并添加省略号
+        if (message.length > 15) {
+            return message.substring(0, 12) + '...';
+        }
+
+        return message;
     }
 
     // 显示恢复总地图按钮

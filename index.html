@@ -19,6 +19,8 @@
                 <p id="header-version">探索世界，规划你的完美旅程</p>
             </div>
             <div class="header-right">
+                <button id="compactModeBtn" class="header-btn compact-mode-btn" title="紧凑模式" style="display: none;">📱
+                    紧凑</button>
                 <button id="saveSchemeBtn" class="header-btn" title="方案管理">📋 方案</button>
                 <button id="importBtn" class="header-btn" title="导入备份">📥 导入</button>
                 <button id="exportBtn" class="header-btn" title="导出功能">📤 导出</button>
@@ -109,6 +111,11 @@
         </footer>
 
     </div>
+
+    <!-- 移动端紧凑模式浮动切换按钮 -->
+    <button id="compactToggleFloating" class="compact-toggle-floating" style="display: none;" title="退出紧凑模式">
+        🔙 退出紧凑
+    </button>
 
     <!-- 模态框 -->
     <div id="placeModal" class="modal">
