@@ -18,6 +18,15 @@ class TravelPlanner {
         this.directionsRenderer = null;
         this.distanceMatrixService = null;
 
+        // API调用缓存和优化机制
+        this.distanceCache = new Map(); // 距离计算缓存：key: "fromLng,fromLat-toLng,toLat", value: {distance, duration, timestamp}
+        this.routeCache = new Map(); // 路线计算缓存：key: "origin-destination", value: {coordinates, distance, duration, timestamp}
+        this.searchCache = new Map(); // 搜索结果缓存：key: keyword, value: {results, timestamp}
+        this.cacheTimeout = 10 * 60 * 1000; // 缓存10分钟
+        this.lastTravelListHash = ''; // 用于检测列表变化的哈希值
+        this.calculateDistancesTimeout = null; // 距离计算防抖定时器
+        this.isCalculatingDistances = false; // 防止重复计算距离的标志
+
         // 路线配置：为每个路线段存储交通方式和地图提供商
         this.routeSegments = new Map(); // key: "fromId-toId", value: { travelMode: "DRIVING", mapProvider: "baidu" }
 
@@ -523,6 +532,9 @@ class TravelPlanner {
     // 设置事件监听器
     setupEventListeners() {
         console.log('🔧 开始设置事件监听器...');
+
+        // 定期清理过期缓存
+        setInterval(() => this.cleanExpiredCache(), 5 * 60 * 1000); // 每5分钟清理一次
 
         // 搜索相关
         const searchBtn = document.getElementById('searchBtn');
@@ -1260,9 +1272,16 @@ class TravelPlanner {
         this.searchWithGaodeWebAPI(keyword, apiKey);
     }
 
-    // 使用高德Web服务API进行搜索
+    // 使用高德Web服务API进行搜索（带缓存优化）
     async searchWithGaodeWebAPI(keyword, apiKey) {
         try {
+            // 检查缓存
+            const cachedResults = this.getCachedSearchResult(keyword);
+            if (cachedResults) {
+                this.displaySearchResults(cachedResults);
+                return;
+            }
+
             console.log('🌐 调用高德Web服务API...');
 
             // 构建请求URL
@@ -1321,6 +1340,10 @@ class TravelPlanner {
                     }).filter(place => place.lng && place.lat);
 
                     console.log('✅ 最终结果数量:', places.length);
+
+                    // 缓存搜索结果
+                    this.cacheSearchResult(keyword, places);
+
                     this.displaySearchResults(places);
                 } else {
                     console.log('📭 搜索成功但无结果');
@@ -2000,6 +2023,15 @@ class TravelPlanner {
                     { message: '新增消息简化系统，紧凑模式下显示更简短的提示', type: 'feature' },
                     { message: '缩短紧凑模式下Toast显示时间，减少界面干扰', type: 'optimize' }
                 ]
+            },
+            // 1.10.0
+            {
+                updates: [
+                    { message: '新增API调用缓存系统，减少重复API调用提升性能', type: 'feature' },
+                    { message: '实现距离计算防抖优化，避免频繁重复计算', type: 'optimize' },
+                    { message: '添加搜索结果缓存，相同关键词复用之前的搜索结果', type: 'optimize' },
+                    { message: '智能检测列表变化，避免不必要的距离重新计算', type: 'feature' }
+                ]
             }
         ];
 
@@ -2174,7 +2206,7 @@ class TravelPlanner {
 
         // 更新显示和相关计算
         this.updateTravelList();
-        this.calculateDistances();
+        this.calculateDistancesWithDebounce();
         this.drawRoute();
 
         // 如果当前显示待定点，需要重新创建待定点标记
@@ -2215,7 +2247,7 @@ class TravelPlanner {
         this.travelList.push(newPlace);
 
         this.updateTravelList();
-        this.calculateDistances();
+        this.calculateDistancesWithDebounce();
         this.drawRoute(); // 添加地点后重新绘制路线
         this.closeModal();
         this.saveData();
@@ -2630,7 +2662,7 @@ class TravelPlanner {
             } else {
                 // 如果是普通地点，正常更新并重新计算距离
                 this.updateTravelList();
-                this.calculateDistances();
+                this.calculateDistancesWithDebounce();
                 this.drawRoute();
             }
 
@@ -3012,7 +3044,7 @@ class TravelPlanner {
     removePlaceFromList(id) {
         this.travelList = this.travelList.filter(item => item.id.toString() !== id);
         this.updateTravelList();
-        this.calculateDistances();
+        this.calculateDistancesWithDebounce();
         this.drawRoute(); // 删除地点后重新绘制路线
         this.removeMarker(id);
         this.saveData();
@@ -3318,8 +3350,18 @@ class TravelPlanner {
         }
     }
 
-    // 使用高德API计算两点间距离
+    // 使用高德API计算两点间距离（带缓存优化）
     async calculateGaodeDistance(fromPlace, toPlace, apiKey) {
+        // 检查缓存
+        const cachedDistance = this.getCachedDistance(fromPlace, toPlace);
+        if (cachedDistance) {
+            return {
+                success: true,
+                distance: cachedDistance.distance,
+                duration: cachedDistance.duration
+            };
+        }
+
         try {
             const url = 'https://restapi.amap.com/v3/direction/driving';
             const params = new URLSearchParams({
@@ -3341,6 +3383,9 @@ class TravelPlanner {
                 const path = data.route.paths[0];
                 const distance = parseFloat(path.distance) / 1000; // 转换为公里
                 const duration = parseFloat(path.duration) / 60;   // 转换为分钟
+
+                // 缓存结果
+                this.cacheDistance(fromPlace, toPlace, distance, duration);
 
                 return {
                     success: true,
@@ -4062,8 +4107,19 @@ class TravelPlanner {
         }
     }
 
-    // 获取高德路径规划数据
+    // 获取高德路径规划数据（带缓存优化）
     async getGaodeRoute(origin, destination, apiKey) {
+        // 检查路线缓存
+        const cachedRoute = this.getCachedRoute(origin, destination);
+        if (cachedRoute) {
+            return {
+                success: true,
+                coordinates: cachedRoute.coordinates,
+                distance: cachedRoute.distance,
+                duration: cachedRoute.duration
+            };
+        }
+
         try {
             const url = 'https://restapi.amap.com/v3/direction/driving';
             const params = new URLSearchParams({
@@ -4100,6 +4156,9 @@ class TravelPlanner {
                     // 如果没有详细路径，使用起终点连线
                     coordinates.push([origin.lng, origin.lat], [destination.lng, destination.lat]);
                 }
+
+                // 缓存路线结果
+                this.cacheRoute(origin, destination, coordinates, parseFloat(path.distance), parseFloat(path.duration));
 
                 return {
                     success: true,
@@ -5545,7 +5604,7 @@ class TravelPlanner {
             // 重新组合：优化后的游玩地点 + 待定地点
             this.travelList = [...newTravelList, ...pendingPlaces];
             this.updateTravelList();
-            this.calculateDistances();
+            this.calculateDistancesWithDebounce();
             this.drawRoute();
             this.saveData();
             this.markAsModified(); // 标记为已修改
@@ -5622,7 +5681,7 @@ class TravelPlanner {
                 this.updatePageTitle();
 
                 this.updateTravelList();
-                this.calculateDistances();
+                this.calculateDistancesWithDebounce();
 
                 // 重新添加标记和绘制路线
                 this.travelList.forEach(place => this.addMarker(place));
@@ -5897,7 +5956,7 @@ class TravelPlanner {
 
         // 更新界面
         this.updateTravelList();
-        this.calculateDistances();
+        this.calculateDistancesWithDebounce();
 
         // 重新创建标记
         this.clearMarkers();
@@ -6458,7 +6517,7 @@ class TravelPlanner {
 
             // 更新界面
             this.updateTravelList();
-            this.calculateDistances();
+            this.calculateDistancesWithDebounce();
 
             // 重新创建标记和路线
             this.travelList.forEach(place => this.addMarker(place));
@@ -6574,7 +6633,7 @@ class TravelPlanner {
 
                 // 更新界面
                 this.updateTravelList();
-                this.calculateDistances();
+                this.calculateDistancesWithDebounce();
 
                 // 重新创建标记和路线
                 this.travelList.forEach(place => this.addMarker(place));
@@ -7671,6 +7730,192 @@ class TravelPlanner {
 
                 console.log(`📐 截图地图缩放级别: ${this.map.getZoom()}, 地图中心: ${this.map.getCenter().lat().toFixed(4)}, ${this.map.getCenter().lng().toFixed(4)}`);
             });
+        }
+    }
+
+    // ==================== API缓存和优化方法 ====================
+
+    // 生成列表变化的哈希值，用于检测是否需要重新计算距离
+    generateTravelListHash() {
+        const activePlaces = this.travelList.filter(place => !place.isPending);
+        const placeData = activePlaces.map(place => ({
+            id: place.id,
+            lat: place.lat,
+            lng: place.lng,
+            isBlank: place.isBlank
+        }));
+        return JSON.stringify(placeData);
+    }
+
+    // 检查是否需要重新计算距离
+    shouldRecalculateDistances() {
+        const currentHash = this.generateTravelListHash();
+        if (currentHash !== this.lastTravelListHash) {
+            this.lastTravelListHash = currentHash;
+            return true;
+        }
+        return false;
+    }
+
+    // 生成距离缓存的键
+    generateDistanceCacheKey(fromPlace, toPlace) {
+        return `${fromPlace.lng},${fromPlace.lat}-${toPlace.lng},${toPlace.lat}`;
+    }
+
+    // 获取缓存的距离数据
+    getCachedDistance(fromPlace, toPlace) {
+        const key = this.generateDistanceCacheKey(fromPlace, toPlace);
+        const cached = this.distanceCache.get(key);
+
+        if (cached && (Date.now() - cached.timestamp) < this.cacheTimeout) {
+            console.log(`📦 使用缓存的距离数据: ${key}`);
+            return cached;
+        }
+
+        return null;
+    }
+
+    // 缓存距离数据
+    cacheDistance(fromPlace, toPlace, distance, duration) {
+        const key = this.generateDistanceCacheKey(fromPlace, toPlace);
+        this.distanceCache.set(key, {
+            distance,
+            duration,
+            timestamp: Date.now()
+        });
+        console.log(`💾 缓存距离数据: ${key}`);
+    }
+
+    // 生成搜索缓存的键
+    generateSearchCacheKey(keyword) {
+        return keyword.toLowerCase().trim();
+    }
+
+    // 获取缓存的搜索结果
+    getCachedSearchResult(keyword) {
+        const key = this.generateSearchCacheKey(keyword);
+        const cached = this.searchCache.get(key);
+
+        if (cached && (Date.now() - cached.timestamp) < this.cacheTimeout) {
+            console.log(`📦 使用缓存的搜索结果: ${keyword}`);
+            return cached.results;
+        }
+
+        return null;
+    }
+
+    // 缓存搜索结果
+    cacheSearchResult(keyword, results) {
+        const key = this.generateSearchCacheKey(keyword);
+        this.searchCache.set(key, {
+            results,
+            timestamp: Date.now()
+        });
+        console.log(`💾 缓存搜索结果: ${keyword} (${results.length}条)`);
+    }
+
+    // 生成路线缓存的键
+    generateRouteCacheKey(origin, destination) {
+        return `${origin.lng},${origin.lat}-${destination.lng},${destination.lat}`;
+    }
+
+    // 获取缓存的路线数据
+    getCachedRoute(origin, destination) {
+        const key = this.generateRouteCacheKey(origin, destination);
+        const cached = this.routeCache.get(key);
+
+        if (cached && (Date.now() - cached.timestamp) < this.cacheTimeout) {
+            console.log(`📦 使用缓存的路线数据: ${key}`);
+            return cached;
+        }
+
+        return null;
+    }
+
+    // 缓存路线数据
+    cacheRoute(origin, destination, coordinates, distance, duration) {
+        const key = this.generateRouteCacheKey(origin, destination);
+        this.routeCache.set(key, {
+            coordinates,
+            distance,
+            duration,
+            timestamp: Date.now()
+        });
+        console.log(`💾 缓存路线数据: ${key}`);
+    }
+
+    // 清理过期缓存
+    cleanExpiredCache() {
+        const now = Date.now();
+        let cleanedCount = 0;
+
+        // 清理距离缓存
+        for (const [key, value] of this.distanceCache.entries()) {
+            if (now - value.timestamp > this.cacheTimeout) {
+                this.distanceCache.delete(key);
+                cleanedCount++;
+            }
+        }
+
+        // 清理搜索缓存
+        for (const [key, value] of this.searchCache.entries()) {
+            if (now - value.timestamp > this.cacheTimeout) {
+                this.searchCache.delete(key);
+                cleanedCount++;
+            }
+        }
+
+        // 清理路线缓存
+        for (const [key, value] of this.routeCache.entries()) {
+            if (now - value.timestamp > this.cacheTimeout) {
+                this.routeCache.delete(key);
+                cleanedCount++;
+            }
+        }
+
+        if (cleanedCount > 0) {
+            console.log(`🧹 清理了 ${cleanedCount} 个过期缓存项`);
+        }
+    }
+
+    // 防抖距离计算
+    calculateDistancesWithDebounce() {
+        // 清除之前的定时器
+        if (this.calculateDistancesTimeout) {
+            clearTimeout(this.calculateDistancesTimeout);
+        }
+
+        // 设置新的防抖定时器
+        this.calculateDistancesTimeout = setTimeout(() => {
+            this.calculateDistancesOptimized();
+        }, 300); // 300ms防抖
+    }
+
+    // 优化后的距离计算（带缓存和重复检查）
+    calculateDistancesOptimized() {
+        // 检查是否正在计算距离
+        if (this.isCalculatingDistances) {
+            console.log('⚠️ 距离计算正在进行中，跳过重复调用');
+            return;
+        }
+
+        // 检查是否需要重新计算
+        if (!this.shouldRecalculateDistances()) {
+            console.log('📋 列表未变化，跳过距离重新计算');
+            return;
+        }
+
+        console.log('🔄 开始优化的距离计算...');
+        this.isCalculatingDistances = true;
+
+        try {
+            // 调用原有的计算逻辑
+            this.calculateDistances();
+        } finally {
+            // 确保在任何情况下都重置标志
+            setTimeout(() => {
+                this.isCalculatingDistances = false;
+            }, 1000);
         }
     }
 }
