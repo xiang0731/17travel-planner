@@ -18,6 +18,26 @@ class TravelPlanner {
         this.directionsRenderer = null;
         this.distanceMatrixService = null;
 
+        // 工具函数：转义 HTML 字符以防止 XSS
+        this.escapeHTML = (str) => {
+            if (!str) return '';
+            return String(str)
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;')
+                .replace(/'/g, '&#39;');
+        };
+
+        // 防抖函数辅助
+        this.debounce = (fn, delay) => {
+            let timer = null;
+            return function (...args) {
+                if (timer) clearTimeout(timer);
+                timer = setTimeout(() => fn.apply(this, args), delay);
+            };
+        };
+
         // API调用缓存和优化机制
         this.distanceCache = new Map(); // 距离计算缓存：key: "fromLng,fromLat-toLng,toLat", value: {distance, duration, timestamp}
         this.routeCache = new Map(); // 路线计算缓存：key: "origin-destination", value: {coordinates, distance, duration, timestamp}
@@ -59,7 +79,9 @@ class TravelPlanner {
             },
             preferences: {
                 openInNewTab: true, // 在新标签页中打开导航
-                showNavigationHint: true // 显示导航操作提示
+                showNavigationHint: true, // 显示导航操作提示
+                showShowInMapButton: true, // 显示"在导航中显示"按钮
+                showNavigateToButton: true // 显示"导航至此处"按钮
             }
         };
 
@@ -128,10 +150,15 @@ class TravelPlanner {
         this.hasUnsavedChanges = true;
         this.updatePageTitle(); // 更新页面标题
 
-        // 如果有当前方案，自动保存
-        if (this.currentSchemeId && this.currentSchemeName) {
-            this.autoSaveCurrentScheme();
+        // 使用防抖处理自动保存，避免频繁写入
+        if (!this.debouncedAutoSave) {
+            this.debouncedAutoSave = this.debounce(() => {
+                if (this.currentSchemeId && this.currentSchemeName) {
+                    this.autoSaveCurrentScheme();
+                }
+            }, 1000);
         }
+        this.debouncedAutoSave();
     }
 
     // 自动保存到当前方案
@@ -238,7 +265,9 @@ class TravelPlanner {
                     if (!this.settings.preferences) {
                         this.settings.preferences = {
                             openInNewTab: true,
-                            showNavigationHint: true
+                            showNavigationHint: true,
+                            showShowInMapButton: true,
+                            showNavigateToButton: true
                         };
                     }
 
@@ -482,7 +511,8 @@ class TravelPlanner {
             const apiDisplayName = apiNameMap[selectedMapApi] || selectedMapApi;
 
             banner.innerHTML = `
-                🔑 为了获得完整的地图功能，请在设置中配置您的${apiDisplayName} API密钥
+                🔑 为了获得完整的地图功能，请在设置中配置您的API密钥
+                // 🔑 为了获得完整的地图功能，请在设置中配置您的${apiDisplayName} API密钥
                 <button id="openApiSettingsBtn" style="
                     margin-left: 15px;
                     padding: 6px 12px;
@@ -538,15 +568,25 @@ class TravelPlanner {
 
         // 搜索相关
         const searchBtn = document.getElementById('searchBtn');
+        const searchInput = document.getElementById('searchInput');
+
         if (searchBtn) {
             searchBtn.addEventListener('click', () => this.searchPlaces());
-            console.log('✅ 搜索按钮事件监听器已设置');
-        } else {
-            console.error('❌ 找不到搜索按钮元素');
         }
-        document.getElementById('searchInput').addEventListener('keypress', (e) => {
-            if (e.key === 'Enter') this.searchPlaces();
-        });
+
+        if (searchInput) {
+            // 添加防抖自动搜索
+            const debouncedSearch = this.debounce(() => this.searchPlaces(), 500);
+            searchInput.addEventListener('input', (e) => {
+                if (e.target.value.trim().length >= 2) {
+                    debouncedSearch();
+                }
+            });
+
+            searchInput.addEventListener('keypress', (e) => {
+                if (e.key === 'Enter') this.searchPlaces();
+            });
+        }
 
         // 列表控制按钮
         document.getElementById('addBlankPlaceBtn').addEventListener('click', () => this.addBlankPlace());
@@ -1663,12 +1703,20 @@ class TravelPlanner {
         if (this.settings.preferences) {
             const openInNewTabCheckbox = document.getElementById('openInNewTab');
             const showNavigationHintCheckbox = document.getElementById('showNavigationHint');
+            const showShowInMapButtonCheckbox = document.getElementById('showShowInMapButton');
+            const showNavigateToButtonCheckbox = document.getElementById('showNavigateToButton');
 
             if (openInNewTabCheckbox) {
                 openInNewTabCheckbox.checked = this.settings.preferences.openInNewTab !== false;
             }
             if (showNavigationHintCheckbox) {
                 showNavigationHintCheckbox.checked = this.settings.preferences.showNavigationHint !== false;
+            }
+            if (showShowInMapButtonCheckbox) {
+                showShowInMapButtonCheckbox.checked = this.settings.preferences.showShowInMapButton !== false;
+            }
+            if (showNavigateToButtonCheckbox) {
+                showNavigateToButtonCheckbox.checked = this.settings.preferences.showNavigateToButton !== false;
             }
         }
     }
@@ -1707,6 +1755,8 @@ class TravelPlanner {
         // 保存导航偏好设置
         const openInNewTabCheckbox = document.getElementById('openInNewTab');
         const showNavigationHintCheckbox = document.getElementById('showNavigationHint');
+        const showShowInMapButtonCheckbox = document.getElementById('showShowInMapButton');
+        const showNavigateToButtonCheckbox = document.getElementById('showNavigateToButton');
 
         if (!this.settings.preferences) {
             this.settings.preferences = {};
@@ -1717,6 +1767,12 @@ class TravelPlanner {
         }
         if (showNavigationHintCheckbox) {
             this.settings.preferences.showNavigationHint = showNavigationHintCheckbox.checked;
+        }
+        if (showShowInMapButtonCheckbox) {
+            this.settings.preferences.showShowInMapButton = showShowInMapButtonCheckbox.checked;
+        }
+        if (showNavigateToButtonCheckbox) {
+            this.settings.preferences.showNavigateToButton = showNavigateToButtonCheckbox.checked;
         }
 
         // 保存到本地存储
@@ -1985,7 +2041,7 @@ class TravelPlanner {
                 updates: [
                     { message: '优化导航功能：桌面设备使用浏览器定位，移动设备使用地图应用定位', type: 'optimize' },
                     { message: '修复电脑端高德导航起点丢失问题', type: 'fix' },
-                    { message: '新增设备类型智能检测，自动选择最优导航策略', type: 'feature' }
+                    { message: '新增设备类型智能检测，自动选择最优导航策略', type: 'optimize' }
                 ]
             },
             // 1.8.2
@@ -2020,7 +2076,7 @@ class TravelPlanner {
                 updates: [
                     { message: '修复紧凑模式下Toast消息占用整屏问题', type: 'fix' },
                     { message: '优化Toast位置为底部居中显示，限制最大宽度200px', type: 'optimize' },
-                    { message: '新增消息简化系统，紧凑模式下显示更简短的提示', type: 'feature' },
+                    { message: '新增消息简化系统，紧凑模式下显示更简短的提示', type: 'optimize' },
                     { message: '缩短紧凑模式下Toast显示时间，减少界面干扰', type: 'optimize' }
                 ]
             },
@@ -2031,6 +2087,26 @@ class TravelPlanner {
                     { message: '实现距离计算防抖优化，避免频繁重复计算', type: 'optimize' },
                     { message: '添加搜索结果缓存，相同关键词复用之前的搜索结果', type: 'optimize' },
                     { message: '智能检测列表变化，避免不必要的距离重新计算', type: 'feature' }
+                ]
+            },
+            // 1.11.0
+            {
+                updates: [
+                    { message: '引入 CSS 变量系统，优化样式可维护性', type: 'feature' },
+                    { message: '重构全局样式，提高主题定制灵活性', type: 'optimize' }
+                ]
+            },
+            // 1.12.0
+            {
+                updates: [
+                    { message: '增强安全性，全面引入 XSS 防护机制', type: 'feature' },
+                    { message: '优化 DOM 渲染逻辑，统一列表渲染函数', type: 'optimize' }
+                ]
+            },
+            // 1.12.1
+            {
+                updates: [
+                    { message: '实现搜索与自动保存的防抖处理，降低系统负载', type: 'optimize' }
                 ]
             }
         ];
@@ -2284,6 +2360,56 @@ class TravelPlanner {
         }, 100);
     }
 
+    // 生成单个游玩点/待定点的 HTML
+    createPlaceItemHTML(place, options = {}) {
+        const { isPending = false, displayOrder = '', index = -1 } = options;
+        const displayName = this.escapeHTML(place.customName || place.name);
+        const escapedDisplayName = displayName.replace(/'/g, "\\'");
+        const escapedAddress = this.escapeHTML(place.address).replace(/'/g, "\\'");
+        const itemClass = isPending ? 'pending-item' : `travel-item ${place.isBlank ? 'blank-item' : ''}`;
+        
+        let actionsHTML = '';
+        if (isPending) {
+            actionsHTML = `
+                <button class="pending-btn" onclick="app.togglePlaceStatus('${place.id}')" title="加入游玩列表">⏳ 待定</button>
+                ${place.lat && place.lng ? `<button class="action-btn locate-btn" onclick="app.locatePlace(${place.lng}, ${place.lat})" title="在地图上定位">📍</button>` : ''}
+                ${place.lat && place.lng && this.settings.preferences.showShowInMapButton ? `<button class="action-btn show-in-map-btn" onclick="app.showInMap(${place.lng}, ${place.lat}, '${escapedDisplayName}')" title="在导航中显示">🗺️</button>` : ''}
+                <button class="action-btn edit-btn" onclick="app.editPlace('${place.id}')" title="编辑游玩点">✏️</button>
+                <button class="action-btn copy-btn" onclick="app.copyPlaceName('${escapedDisplayName}')" title="复制名称">📋</button>
+                <button class="action-btn copy-btn" onclick="app.copyPlaceAddress('${escapedAddress}')" title="复制地址">📄</button>
+                <button class="action-btn" onclick="app.removePlaceFromList('${place.id}')" title="删除">✕</button>
+            `;
+        } else {
+            actionsHTML = `
+                <button class="activate-btn" onclick="app.togglePlaceStatus('${place.id}')" title="移至待定">🎯 游玩</button>
+                ${place.lat && place.lng ? `<button class="action-btn locate-btn" onclick="app.locatePlace(${place.lng}, ${place.lat})" title="在地图上定位">📍</button>` : ''}
+                ${place.lat && place.lng && this.settings.preferences.showShowInMapButton ? `<button class="action-btn show-in-map-btn" onclick="app.showInMap(${place.lng}, ${place.lat}, '${escapedDisplayName}')" title="在导航中显示">🗺️</button>` : ''}
+                ${place.lat && place.lng && this.settings.preferences.showNavigateToButton ? `<button class="action-btn navigate-to-btn" onclick="app.navigateToPlace(${place.lng}, ${place.lat}, '${escapedDisplayName}')" title="导航到此处">🧭</button>` : ''}
+                <button class="action-btn edit-btn" onclick="app.editPlace('${place.id}')" title="编辑游玩点">✏️</button>
+                <button class="action-btn copy-btn" onclick="app.copyPlaceName('${escapedDisplayName}')" title="复制名称">📋</button>
+                <button class="action-btn copy-btn" onclick="app.copyPlaceAddress('${escapedAddress}')" title="复制地址">📄</button>
+                <button class="action-btn" onclick="app.removePlaceFromList('${place.id}')" title="删除">✕</button>
+            `;
+        }
+
+        return `
+            <li class="${itemClass}" ${!isPending ? 'draggable="true"' : ''} data-id="${place.id}">
+                <div class="${isPending ? 'pending-item-header' : 'travel-item-header'}">
+                    <div class="${isPending ? 'pending-item-left' : 'travel-item-left'}">
+                        ${!isPending ? '<span class="drag-handle">⠿</span>' : ''}
+                        ${displayOrder ? `<span class="travel-item-order">${displayOrder}</span>` : ''}
+                        <span class="${isPending ? 'pending-item-name' : 'travel-item-name'}">${displayName}</span>
+                    </div>
+                </div>
+                <div class="${isPending ? 'pending-item-address' : 'travel-item-address'}">📮 ${this.escapeHTML(place.address)}</div>
+                ${place.notes ? `<div class="${isPending ? 'pending-item-notes' : 'travel-item-notes'}">${this.escapeHTML(place.notes)}</div>` : ''}
+                <div class="${isPending ? 'pending-item-actions' : 'travel-item-actions'}">
+                    ${actionsHTML}
+                </div>
+            </li>
+        `;
+    }
+
     // 更新游玩列表显示
     updateTravelList() {
         // 分离游玩中和待定的地点
@@ -2371,7 +2497,6 @@ class TravelPlanner {
                 if (hasCoordinates && !place.isBlank) {
                     // 显示到前一个非空白地点的距离
                     const segmentKey = `${prevNonBlankPlace.id}-${place.id}`;
-                    const segmentConfig = this.routeSegments.get(segmentKey) || { mapProvider: 'amap' };
 
                     // 确保新路线段使用高德地图作为默认
                     if (!this.routeSegments.has(segmentKey)) {
@@ -2415,11 +2540,6 @@ class TravelPlanner {
                 }
             }
 
-            // 然后显示地点信息
-            const displayName = place.customName || place.name;
-            const escapedCustomName = (place.customName || '').replace(/'/g, "\\'");
-            const escapedOriginalName = place.name.replace(/'/g, "\\'");
-
             // 只为非空白地点分配序号
             let displayOrder = '';
             if (!place.isBlank) {
@@ -2429,29 +2549,7 @@ class TravelPlanner {
                 displayOrder = '✏️'; // 空白地点显示编辑图标
             }
 
-            htmlContent += `
-                <li class="travel-item ${place.isBlank ? 'blank-item' : ''}" draggable="true" data-id="${place.id}">
-                    <div class="travel-item-header">
-                        <div class="travel-item-left">
-                            <span class="drag-handle">⠿</span>
-                            <span class="travel-item-order">${displayOrder}</span>
-                            <span class="travel-item-name">${displayName}</span>
-                        </div>
-                    </div>
-                    <div class="travel-item-address">📮 ${place.address}</div>
-                    ${place.notes ? `<div class="travel-item-notes">${place.notes}</div>` : ''}
-                    <div class="travel-item-actions">
-                        <button class="activate-btn" onclick="app.togglePlaceStatus('${place.id}')" title="移至待定">🎯 游玩</button>
-                        ${place.lat && place.lng ? `<button class="action-btn locate-btn" onclick="app.locatePlace(${place.lng}, ${place.lat})" title="在地图上定位">📍</button>` : ''}
-                        ${place.lat && place.lng ? `<button class="action-btn show-in-map-btn" onclick="app.showInMap(${place.lng}, ${place.lat}, '${displayName.replace(/'/g, "\\'")}')" title="在导航中显示">🗺️</button>` : ''}
-                        ${place.lat && place.lng ? `<button class="action-btn navigate-to-btn" onclick="app.navigateToPlace(${place.lng}, ${place.lat}, '${displayName.replace(/'/g, "\\'")}')" title="导航到此处">🧭</button>` : ''}
-                        <button class="action-btn edit-btn" onclick="app.editPlace('${place.id}')" title="编辑游玩点">✏️</button>
-                        <button class="action-btn copy-btn" onclick="app.copyPlaceName('${escapedCustomName || escapedOriginalName}')" title="复制名称">📋</button>
-                        <button class="action-btn copy-btn" onclick="app.copyPlaceAddress('${place.address.replace(/'/g, "\\'")}')" title="复制地址">📄</button>
-                        <button class="action-btn" onclick="app.removePlaceFromList('${place.id}')" title="删除">✕</button>
-                    </div>
-                </li>
-            `;
+            htmlContent += this.createPlaceItemHTML(place, { isPending: false, displayOrder, index });
         });
 
         listContainer.innerHTML = htmlContent;
@@ -2486,7 +2584,6 @@ class TravelPlanner {
                 if (hasCoordinates && !place.isBlank) {
                     // 显示到前一个非空白地点的距离
                     const segmentKey = `${prevNonBlankPlace.id}-${place.id}`;
-                    const segmentConfig = this.routeSegments.get(segmentKey) || { mapProvider: 'amap' };
 
                     // 确保新路线段使用高德地图作为默认
                     if (!this.routeSegments.has(segmentKey)) {
@@ -2526,11 +2623,6 @@ class TravelPlanner {
                 }
             }
 
-            // 然后显示地点信息
-            const displayName = place.customName || place.name;
-            const escapedCustomName = (place.customName || '').replace(/'/g, "\\'");
-            const escapedOriginalName = place.name.replace(/'/g, "\\'");
-
             // 只为非空白地点分配序号
             let displayOrder = '';
             if (!place.isBlank) {
@@ -2540,29 +2632,7 @@ class TravelPlanner {
                 displayOrder = '✏️'; // 空白地点显示编辑图标
             }
 
-            htmlContent += `
-                <li class="travel-item ${place.isBlank ? 'blank-item' : ''}" draggable="true" data-id="${place.id}">
-                    <div class="travel-item-header">
-                        <div class="travel-item-left">
-                            <span class="drag-handle">⠿</span>
-                            <span class="travel-item-order">${displayOrder}</span>
-                            <span class="travel-item-name">${displayName}</span>
-                        </div>
-                    </div>
-                    <div class="travel-item-address">📮 ${place.address}</div>
-                    ${place.notes ? `<div class="travel-item-notes">${place.notes}</div>` : ''}
-                    <div class="travel-item-actions">
-                        <button class="activate-btn" onclick="app.togglePlaceStatus('${place.id}')" title="移至待定">🎯 游玩</button>
-                        ${place.lat && place.lng ? `<button class="action-btn locate-btn" onclick="app.locatePlace(${place.lng}, ${place.lat})" title="在地图上定位">📍</button>` : ''}
-                        ${place.lat && place.lng ? `<button class="action-btn show-in-map-btn" onclick="app.showInMap(${place.lng}, ${place.lat}, '${displayName.replace(/'/g, "\\'")}')" title="在导航中显示">🗺️</button>` : ''}
-                        ${place.lat && place.lng ? `<button class="action-btn navigate-to-btn" onclick="app.navigateToPlace(${place.lng}, ${place.lat}, '${displayName.replace(/'/g, "\\'")}')" title="导航到此处">🧭</button>` : ''}
-                        <button class="action-btn edit-btn" onclick="app.editPlace('${place.id}')" title="编辑游玩点">✏️</button>
-                        <button class="action-btn copy-btn" onclick="app.copyPlaceName('${escapedCustomName || escapedOriginalName}')" title="复制名称">📋</button>
-                        <button class="action-btn copy-btn" onclick="app.copyPlaceAddress('${place.address.replace(/'/g, "\\'")}')" title="复制地址">📄</button>
-                        <button class="action-btn" onclick="app.removePlaceFromList('${place.id}')" title="删除">✕</button>
-                    </div>
-                </li>
-            `;
+            htmlContent += this.createPlaceItemHTML(place, { isPending: false, displayOrder, index });
         });
 
         listContainer.innerHTML = htmlContent;
@@ -2578,32 +2648,8 @@ class TravelPlanner {
         }
 
         let htmlContent = '';
-
         pendingPlaces.forEach((place) => {
-            const displayName = place.customName || place.name;
-            const escapedCustomName = (place.customName || '').replace(/'/g, "\\'");
-            const escapedOriginalName = place.name.replace(/'/g, "\\'");
-
-            htmlContent += `
-                <li class="pending-item" data-id="${place.id}">
-                    <div class="pending-item-header">
-                        <div class="pending-item-left">
-                            <span class="pending-item-name">${displayName}</span>
-                        </div>
-                    </div>
-                    <div class="pending-item-address">📮 ${place.address}</div>
-                    ${place.notes ? `<div class="pending-item-notes">${place.notes}</div>` : ''}
-                    <div class="pending-item-actions">
-                        <button class="pending-btn" onclick="app.togglePlaceStatus('${place.id}')" title="加入游玩列表">⏳ 待定</button>
-                        ${place.lat && place.lng ? `<button class="action-btn locate-btn" onclick="app.locatePlace(${place.lng}, ${place.lat})" title="在地图上定位">📍</button>` : ''}
-                        ${place.lat && place.lng ? `<button class="action-btn show-in-map-btn" onclick="app.showInMap(${place.lng}, ${place.lat}, '${displayName.replace(/'/g, "\\'")}')" title="在导航中显示">🗺️</button>` : ''}
-                        <button class="action-btn edit-btn" onclick="app.editPlace('${place.id}')" title="编辑游玩点">✏️</button>
-                        <button class="action-btn copy-btn" onclick="app.copyPlaceName('${escapedCustomName || escapedOriginalName}')" title="复制名称">📋</button>
-                        <button class="action-btn copy-btn" onclick="app.copyPlaceAddress('${place.address.replace(/'/g, "\\'")}')" title="复制地址">📄</button>
-                        <button class="action-btn" onclick="app.removePlaceFromList('${place.id}')" title="删除">✕</button>
-                    </div>
-                </li>
-            `;
+            htmlContent += this.createPlaceItemHTML(place, { isPending: true });
         });
 
         listContainer.innerHTML = htmlContent;
@@ -2799,13 +2845,13 @@ class TravelPlanner {
 
     // 在地图中显示游玩点（不进行导航，仅显示位置）
     showInMap(lng, lat, name) {
-        // 根据用户设置选择地图应用
-        const selectedMapApi = this.settings.selectedMapApi || 'gaode';
+        // 根据用户设置选择导航应用（统一使用导航设置）
+        const navigationApp = this.settings.navigationApp || 'amap';
         let url = '';
         let appName = '';
 
-        switch (selectedMapApi) {
-            case 'gaode':
+        switch (navigationApp) {
+            case 'amap':
                 // 高德地图：显示POI点，不进行导航
                 url = `https://uri.amap.com/marker?position=${lng},${lat}&name=${encodeURIComponent(name)}&src=17travelplanner&coordinate=gaode&callnative=1`;
                 appName = '高德地图';
@@ -4479,7 +4525,7 @@ class TravelPlanner {
             this.calculateSegmentDistanceWithGaode(fromPlace, toPlace, toId);
         } else {
             // 使用直线距离作为备用
-            this.calculateSegmentDistanceWithStraightLine(fromPlace, toPlace, toId);
+            this.calculateSegmentDistanceWithStraightLine(fromPlace, toPlace, toId, '估算');
         }
     }
 
@@ -8307,4 +8353,4 @@ if (typeof window !== 'undefined') {
     console.log('  - testMarkerToggle() : 测试标记清除和恢复功能');
     console.log('  - testGaodeMarkers() : 测试高德地图标记功能');
     console.log('  - testGaodeCompatibility() : 测试高德地图完整兼容性');
-} 
+}

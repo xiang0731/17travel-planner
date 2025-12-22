@@ -1,4 +1,22 @@
 /* 基础样式重置 */
+:root {
+    --primary-gradient: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    --secondary-gradient: linear-gradient(135deg, #667eea, #764ba2);
+    --primary-color: #667eea;
+    --secondary-color: #764ba2;
+    --text-main: #333;
+    --text-secondary: #7f8c8d;
+    --text-dark: #2c3e50;
+    --bg-light: #f8f9fa;
+    --bg-white: rgba(255, 255, 255, 0.95);
+    --border-color: #e0e6ed;
+    --shadow-main: 0 4px 24px rgba(0, 0, 0, 0.08);
+    --shadow-hover: 0 5px 15px rgba(102, 126, 234, 0.4);
+    --radius-main: 12px;
+    --radius-btn: 25px;
+    --transition: all 0.3s ease;
+}
+
 * {
     margin: 0;
     padding: 0;
@@ -12,9 +30,9 @@ html {
 
 body {
     font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    background: var(--primary-gradient);
     height: 100vh;
-    color: #333;
+    color: var(--text-main);
     margin: 0;
     padding: 0;
     overflow: hidden;
@@ -32,7 +50,7 @@ body {
 
 /* 头部样式 */
 header {
-    background: rgba(255, 255, 255, 0.95);
+    background: var(--bg-white);
     padding: 15px 20px;
     border-radius: 0;
     margin: 0;
@@ -57,31 +75,31 @@ header {
 
 .header-btn {
     padding: 10px 16px;
-    background: linear-gradient(135deg, #667eea, #764ba2);
+    background: var(--secondary-gradient);
     color: white;
     border: none;
     border-radius: 20px;
     cursor: pointer;
     font-weight: 600;
-    transition: all 0.3s ease;
+    transition: var(--transition);
     font-size: 13px;
     white-space: nowrap;
 }
 
 .header-btn:hover {
     transform: translateY(-2px);
-    box-shadow: 0 5px 15px rgba(102, 126, 234, 0.4);
+    box-shadow: var(--shadow-hover);
 }
 
 header h1 {
-    color: #2c3e50;
+    color: var(--text-dark);
     font-size: 2.2rem;
     margin-bottom: 8px;
     font-weight: 700;
 }
 
 header p {
-    color: #7f8c8d;
+    color: var(--text-secondary);
     font-size: 1rem;
     margin: 0;
 }
