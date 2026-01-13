@@ -95,6 +95,11 @@ class TravelPlanner {
         this.hasUnsavedChanges = false; // 跟踪是否有未保存的更改
         this.isAutoSaving = false; // 防止自动保存时的递归调用
 
+        // 避让算法优化相关属性
+        this.labelCandidates = null; // 缓存候选偏移位置
+        this.adjustLabelsRafId = null; // 用于 requestAnimationFrame 的节流
+        this.labelSizeCache = new Map(); // 缓存标签尺寸，减少 DOM 读取
+
         // 导入冲突处理状态
         this.pendingImportData = null;
         this.conflictResolutions = new Map(); // 存储冲突解决方案
@@ -798,6 +803,9 @@ class TravelPlanner {
                             this.position = position;
                             this.text = text;
                             this.div = null;
+                            this.line = null; // 连接线元素
+                            this.offsetX = 0; // 水平偏移
+                            this.offsetY = 0; // 垂直偏移
                             this.setMap(map);
                         }
 
@@ -806,7 +814,7 @@ class TravelPlanner {
                             this.div = document.createElement('div');
                             this.div.style.cssText = `
                                 position: absolute;
-                                background: linear-gradient(135deg, rgba(255,255,255,0.9) 0%, rgba(248,250,252,0.92) 100%);
+                                background: linear-gradient(135deg, rgba(255,255,255,0.95) 0%, rgba(248,250,252,0.98) 100%);
                                 border: 1px solid rgba(255,255,255,0.8);
                                 border-radius: 8px;
                                 padding: 6px 10px;
@@ -825,7 +833,22 @@ class TravelPlanner {
                                 cursor: default;
                                 user-select: none;
                                 z-index: 1000;
+                                transition: opacity 0.2s ease, top 0.3s cubic-bezier(0.4, 0, 0.2, 1), left 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+                            `;
+
+                            // 创建连接线元素 (SVG)
+                            this.line = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+                            this.line.style.cssText = `
+                                position: absolute;
+                                pointer-events: none;
+                                z-index: 999;
+                                overflow: visible;
                                 transition: opacity 0.2s ease;
+                                opacity: 0;
+                            `;
+                            this.line.innerHTML = `
+                                <line x1="0" y1="0" x2="0" y2="0" 
+                                    style="stroke: rgba(102, 126, 234, 0.6); stroke-width: 2; stroke-dasharray: 4,3;" />
                             `;
 
                             // 分离编号和名称的样式
@@ -847,19 +870,89 @@ class TravelPlanner {
 
                             // 添加到地图覆盖层
                             const panes = this.getPanes();
+                            panes.overlayLayer.appendChild(this.line);
                             panes.overlayLayer.appendChild(this.div);
                         }
 
                         draw() {
-                            if (!this.div) return;
+                            if (!this.div || !this.line) return;
 
                             // 将地理坐标转换为屏幕坐标
                             const overlayProjection = this.getProjection();
                             const position = overlayProjection.fromLatLngToDivPixel(this.position);
 
-                            // 设置标签位置（在标记上方）
-                            this.div.style.left = position.x + 'px';
-                            this.div.style.top = (position.y - 85) + 'px'; // 在标记上方85px，避免与大头针重叠
+                            // 基础位置（标记的正上方，约40px处是大头针顶部）
+                            const baseUrlX = position.x;
+                            const baseUrlY = position.y - 40;
+
+                            // 标签目标位置
+                            const labelX = position.x + this.offsetX;
+                            const labelY = position.y - 85 - this.offsetY;
+
+                            // 设置标签位置
+                            this.div.style.left = labelX + 'px';
+                            this.div.style.top = labelY + 'px';
+
+                            // 更新连接线
+                            if (this.offsetX !== 0 || this.offsetY > 0) {
+                                this.line.style.opacity = '1';
+                                const lineEl = this.line.querySelector('line');
+                                
+                                // 设置 SVG 容器位置
+                                this.line.style.left = Math.min(baseUrlX, labelX) + 'px';
+                                this.line.style.top = Math.min(baseUrlY, labelY + 25) + 'px';
+                                
+                                // 设置线条起点和终点（相对于 SVG 容器）
+                                const x1 = baseUrlX - Math.min(baseUrlX, labelX);
+                                const y1 = baseUrlY - Math.min(baseUrlY, labelY + 25);
+                                const x2 = labelX - Math.min(baseUrlX, labelX);
+                                const y2 = (labelY + 25) - Math.min(baseUrlY, labelY + 25);
+                                
+                                lineEl.setAttribute('x1', x1);
+                                lineEl.setAttribute('y1', y1);
+                                lineEl.setAttribute('x2', x2);
+                                lineEl.setAttribute('y2', y2);
+                            } else {
+                                this.line.style.opacity = '0';
+                            }
+                        }
+
+                        // 设置偏移量并重绘
+                        setOffset(offsetX, offsetY) {
+                            if (this.offsetX !== offsetX || this.offsetY !== offsetY) {
+                                this.offsetX = offsetX;
+                                this.offsetY = offsetY;
+                                this.draw();
+                            }
+                        }
+
+                        onRemove() {
+                            if (this.div) {
+                                this.div.parentNode.removeChild(this.div);
+                                this.div = null;
+                            }
+                            if (this.line) {
+                                this.line.parentNode.removeChild(this.line);
+                                this.line = null;
+                            }
+                        }
+
+                        hide() {
+                            if (this.div) {
+                                this.div.style.opacity = '0';
+                                this.div.style.pointerEvents = 'none';
+                            }
+                            if (this.line) this.line.style.opacity = '0';
+                        }
+
+                        show() {
+                            if (this.div) {
+                                this.div.style.opacity = '1';
+                                this.div.style.pointerEvents = 'auto';
+                            }
+                            if (this.line && (this.offsetX !== 0 || this.offsetY > 0)) {
+                                this.line.style.opacity = '1';
+                            }
                         }
 
                         onRemove() {
@@ -931,6 +1024,14 @@ class TravelPlanner {
                     this.onMapClick(e.latLng.lng(), e.latLng.lat());
                 });
 
+                // 监听缩放和空闲事件以调整标签位置
+                this.map.addListener('zoom_changed', () => {
+                    setTimeout(() => this.adjustLabels(), 100);
+                });
+                this.map.addListener('idle', () => {
+                    this.adjustLabels();
+                });
+
                 this.isMapLoaded = true;
                 console.log('Google地图初始化成功');
 
@@ -981,6 +1082,17 @@ class TravelPlanner {
                     const lng = e.lnglat.lng;
                     const lat = e.lnglat.lat;
                     this.onMapClick(lng, lat);
+                });
+
+                // 监听缩放和地图状态变化事件以调整标签位置
+                this.map.on('zoomchange', () => {
+                    setTimeout(() => this.adjustLabels(), 100);
+                });
+                this.map.on('complete', () => {
+                    this.adjustLabels();
+                });
+                this.map.on('moveend', () => {
+                    this.adjustLabels();
                 });
 
                 // 创建一些基础的地图控件
@@ -1042,9 +1154,8 @@ class TravelPlanner {
 
         console.log('🎯 初始化地图内容：添加标记和绘制路线');
 
-        // 添加所有标记
-        const activePlaces = this.travelList.filter(place => !place.isPending);
-        activePlaces.forEach(place => this.addMarker(place));
+        // 重新创建所有标记（只为激活的地点）
+        this.recreateMarkers();
 
         // 绘制路线
         if (activePlaces.length >= 2) {
@@ -2107,6 +2218,15 @@ class TravelPlanner {
             {
                 updates: [
                     { message: '实现搜索与自动保存的防抖处理，降低系统负载', type: 'optimize' }
+                ]
+            },
+            // 1.13.0
+            {
+                updates: [
+                    { message: '新增地点名称智能避让系统，多维度自动寻找最优显示位置', type: 'feature' },
+                    { message: '添加动态虚线牵引功能，清晰关联名称标签与地图图标', type: 'feature' },
+                    { message: '优化标签排列算法，优先就近显示并防止遮挡图标', type: 'optimize' },
+                    { message: '修复由于初始化逻辑冗余导致的游玩点名称重复显示问题', type: 'fix' }
                 ]
             }
         ];
@@ -3663,6 +3783,7 @@ class TravelPlanner {
 
         const labelMarker = new AMap.Marker({
             position: [place.lng, place.lat],
+            offset: new AMap.Pixel(0, -75),
             content: `
                 <div style="
                     position: absolute;
@@ -3683,10 +3804,10 @@ class TravelPlanner {
                     cursor: default;
                     user-select: none;
                     z-index: 1000;
-                    top: -75px;
                     left: 50%;
                     transform: translateX(-50%);
                     pointer-events: none;
+                 transition: transform 0.3s ease;
                 ">
                     <span style="
                         background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
@@ -4482,13 +4603,21 @@ class TravelPlanner {
     }
 
     // 设置marker可见性（兼容Google Maps和高德地图）
-    setMarkerVisible(marker, visible) {
+    setMarkerVisible(marker, visible, label = null) {
         const selectedMapApi = this.settings.selectedMapApi;
 
         if (selectedMapApi === 'google' && typeof google !== 'undefined') {
             // Google Maps marker
             if (marker && typeof marker.setVisible === 'function') {
                 marker.setVisible(visible);
+            }
+            // Google Maps label
+            if (label) {
+                if (visible && this.showPlaceNames) {
+                    label.show();
+                } else {
+                    label.hide();
+                }
             }
         } else if (selectedMapApi === 'gaode' && typeof AMap !== 'undefined') {
             // 高德地图marker
@@ -4501,6 +4630,14 @@ class TravelPlanner {
                     if (typeof marker.hide === 'function') {
                         marker.hide();
                     }
+                }
+            }
+            // 高德地图 label (也是一个 Marker)
+            if (label) {
+                if (visible && this.showPlaceNames) {
+                    if (typeof label.show === 'function') label.show();
+                } else {
+                    if (typeof label.hide === 'function') label.hide();
                 }
             }
         } else {
@@ -4842,6 +4979,9 @@ class TravelPlanner {
                 toggleBtn.textContent = '🏷️ 隐藏名称';
                 toggleBtn.title = '隐藏地点名称';
                 this.showToast('已显示地点名称');
+                
+                // 显示后自动调整位置以防重叠
+                setTimeout(() => this.adjustLabels(), 300);
             } else {
                 // 隐藏所有地点名称（包括游玩点和待定点）
                 this.placeLabels.forEach(l => {
@@ -4872,7 +5012,223 @@ class TravelPlanner {
             toggleBtn.textContent = this.showPlaceNames ? '🏷️ 隐藏名称' : '🏷️ 显示名称';
             toggleBtn.title = this.showPlaceNames ? '隐藏地点名称' : '显示地点名称';
             this.showToast(this.showPlaceNames ? '已显示地点名称' : '已隐藏地点名称');
+            
+            if (this.showPlaceNames) {
+                setTimeout(() => this.adjustLabels(), 300);
+            }
         }
+    }
+
+    // 自动调整标签位置以防止重叠
+    adjustLabels() {
+        if (!this.isMapLoaded || !this.showPlaceNames) return;
+
+        // 使用 requestAnimationFrame 进行节流，防止高频触发导致的性能问题
+        if (this.adjustLabelsRafId) {
+            cancelAnimationFrame(this.adjustLabelsRafId);
+        }
+
+        this.adjustLabelsRafId = requestAnimationFrame(() => {
+            this._executeAdjustLabels();
+            this.adjustLabelsRafId = null;
+        });
+    }
+
+    // 内部执行避让算法的方法
+    _executeAdjustLabels() {
+        const selectedMapApi = this.settings.selectedMapApi;
+
+        // 获取所有活跃且可见的标签
+        const allLabels = [];
+        this.placeLabels.forEach(l => {
+            if (l.label) {
+                let isVisible = true;
+                if (selectedMapApi === 'google') {
+                    isVisible = l.label.div && l.label.div.style.opacity !== '0';
+                } else if (selectedMapApi === 'gaode') {
+                    isVisible = l.label.getVisible();
+                }
+                if (isVisible) allLabels.push({ type: 'place', data: l });
+            }
+        });
+        
+        if (this.showPendingPlaces) {
+            this.pendingMarkers.forEach(m => {
+                if (m.label) {
+                    let isVisible = true;
+                    if (selectedMapApi === 'google') {
+                        isVisible = m.label.div && m.label.div.style.opacity !== '0';
+                    } else if (selectedMapApi === 'gaode') {
+                        isVisible = m.label.getVisible();
+                    }
+                    if (isVisible) allLabels.push({ type: 'pending', data: m });
+                }
+            });
+        }
+
+        if (allLabels.length === 0) return;
+
+        // 1. 批量读取 DOM 尺寸和初始位置（减少重排）
+        const labelData = allLabels.map(item => {
+            let labelElement = null;
+            if (selectedMapApi === 'google') {
+                labelElement = item.data.label.div;
+            } else if (selectedMapApi === 'gaode') {
+                labelElement = item.data.label.getElement();
+                if (labelElement) labelElement = labelElement.querySelector('div');
+            }
+            
+            if (!labelElement) return null;
+
+            // 获取或缓存尺寸
+            const labelId = item.data.id;
+            let size = this.labelSizeCache.get(labelId);
+            if (!size || labelElement.offsetWidth !== size.width) {
+                size = {
+                    width: labelElement.offsetWidth || 100,
+                    height: labelElement.offsetHeight || 32
+                };
+                this.labelSizeCache.set(labelId, size);
+            }
+
+            // 获取屏幕坐标
+            let centerX = 0, centerY = 0, pinTop = 0;
+            if (selectedMapApi === 'google') {
+                const projection = item.data.label.getProjection();
+                if (projection) {
+                    const pos = projection.fromLatLngToDivPixel(item.data.label.position);
+                    centerX = pos.x;
+                    centerY = pos.y - 85;
+                    pinTop = pos.y - 55;
+                }
+            } else {
+                const pos = this.map.lngLatToContainer(item.data.label.getPosition());
+                centerX = pos.getX();
+                centerY = pos.getY() - 85;
+                pinTop = pos.getY() - 55;
+            }
+
+            return {
+                item: item,
+                centerX, centerY, pinTop,
+                width: size.width,
+                height: size.height,
+                offsetX: 0, offsetY: 0
+            };
+        }).filter(d => d && d.centerX !== 0);
+
+        // 2. 预计算候选位置（仅在首次或需要时）
+        if (!this.labelCandidates) {
+            const candidates = [];
+            const stepX = 45;
+            const stepY = 35;
+            for (let row = 0; row <= 5; row++) {
+                for (let col = -3; col <= 3; col++) {
+                    const x = col * stepX;
+                    const y = row * stepY;
+                    candidates.push({ x, y, dist: Math.sqrt(x * x + y * y) });
+                }
+            }
+            this.labelCandidates = candidates.sort((a, b) => a.dist - b.dist);
+        }
+
+        // 3. 执行避让数学计算
+        const occupiedRects = [];
+        const padding = 6;
+
+        // 优先锁定图标区域为禁区
+        labelData.forEach(label => {
+            occupiedRects.push({
+                left: label.centerX - 18,
+                right: label.centerX + 18,
+                top: label.pinTop - 5,
+                bottom: label.pinTop + 55
+            });
+        });
+
+        labelData.forEach(label => {
+            for (let candidate of this.labelCandidates) {
+                const rect = {
+                    left: label.centerX + candidate.x - label.width / 2 - padding,
+                    right: label.centerX + candidate.x + label.width / 2 + padding,
+                    top: label.centerY - candidate.y - padding,
+                    bottom: label.centerY - candidate.y + label.height + padding
+                };
+
+                const conflict = occupiedRects.some(r => {
+                    return !(rect.right < r.left || rect.left > r.right || 
+                             rect.bottom < r.top || rect.top > r.bottom);
+                });
+
+                if (!conflict) {
+                    label.offsetX = candidate.x;
+                    label.offsetY = candidate.y;
+                    occupiedRects.push(rect);
+                    break;
+                }
+            }
+        });
+
+        // 4. 批量应用样式（统一渲染）
+        labelData.forEach(data => {
+            if (selectedMapApi === 'google') {
+                data.item.data.label.setOffset(data.offsetX, data.offsetY);
+            } else {
+                data.item.data.label.setOffset(new AMap.Pixel(data.offsetX, -75 - data.offsetY));
+                this.updateGaodeLabelLine(data.item.data.label, data.offsetX, data.offsetY);
+            }
+        });
+    }
+
+    // 更新高德地图标签的连线
+    updateGaodeLabelLine(labelMarker, offsetX, offsetY) {
+        let labelElement = labelMarker.getElement();
+        if (!labelElement) return;
+
+        let lineContainer = labelElement.querySelector('.label-leader-line');
+        
+        if (offsetX === 0 && offsetY === 0) {
+            if (lineContainer) lineContainer.style.opacity = '0';
+            return;
+        }
+
+        if (!lineContainer) {
+            lineContainer = document.createElement('div');
+            lineContainer.className = 'label-leader-line';
+            lineContainer.style.cssText = `
+                position: absolute;
+                pointer-events: none;
+                z-index: -1;
+                transition: opacity 0.2s ease;
+            `;
+            labelElement.appendChild(lineContainer);
+        }
+
+        lineContainer.style.opacity = '1';
+        
+        // 计算连线起点和终点
+        const startX = -offsetX;
+        const startY = 45 + offsetY;
+        const endX = 0;
+        const endY = 25;
+
+        const width = Math.abs(startX - endX);
+        const height = Math.abs(startY - endY);
+        const left = Math.min(startX, endX);
+        const top = Math.min(startY, endY);
+
+        lineContainer.style.width = Math.max(width, 2) + 'px';
+        lineContainer.style.height = Math.max(height, 2) + 'px';
+        lineContainer.style.left = `calc(50% + ${left}px)`;
+        lineContainer.style.top = `${top}px`;
+
+        // 使用 SVG 画虚线
+        lineContainer.innerHTML = `
+            <svg width="${Math.max(width, 2)}" height="${Math.max(height, 2)}" style="overflow:visible">
+                <line x1="${startX - left}" y1="${startY - top}" x2="${endX - left}" y2="${endY - top}" 
+                    style="stroke: rgba(102, 126, 234, 0.6); stroke-width: 2; stroke-dasharray: 4,3;" />
+            </svg>
+        `;
     }
 
     // 更新待定点按钮状态
@@ -5111,6 +5467,7 @@ class TravelPlanner {
     createGaodePendingLabel(place, displayName) {
         const labelMarker = new AMap.Marker({
             position: [place.lng, place.lat],
+            offset: new AMap.Pixel(0, -75),
             content: `
                 <div style="
                     position: absolute;
@@ -5131,7 +5488,6 @@ class TravelPlanner {
                     cursor: default;
                     user-select: none;
                     z-index: 600;
-                    top: -75px;
                     left: 50%;
                     transform: translateX(-50%);
                     pointer-events: none;
@@ -5324,14 +5680,15 @@ class TravelPlanner {
     applyyCityFilter() {
         if (!this.isMapLoaded) return;
 
-        // 隐藏所有标记（游玩点）
+        // 隐藏所有标记（游玩点和其对应的标签）
         this.markers.forEach(markerObj => {
-            this.setMarkerVisible(markerObj.marker, false);
+            const labelObj = this.placeLabels.find(l => l.id.toString() === markerObj.id.toString());
+            this.setMarkerVisible(markerObj.marker, false, labelObj ? labelObj.label : null);
         });
 
-        // 隐藏所有待定点标记
+        // 隐藏所有待定点标记及其标签
         this.pendingMarkers.forEach(markerObj => {
-            this.setMarkerVisible(markerObj.marker, false);
+            this.setMarkerVisible(markerObj.marker, false, markerObj.label);
         });
 
         // 根据过滤条件显示标记
@@ -5340,12 +5697,13 @@ class TravelPlanner {
         if (this.currentCityFilter === 'all') {
             // 显示所有游玩点标记
             this.markers.forEach(markerObj => {
-                this.setMarkerVisible(markerObj.marker, true);
+                const labelObj = this.placeLabels.find(l => l.id.toString() === markerObj.id.toString());
+                this.setMarkerVisible(markerObj.marker, true, labelObj ? labelObj.label : null);
             });
             // 显示所有待定点标记（如果当前显示待定点）
             if (this.showPendingPlaces) {
                 this.pendingMarkers.forEach(markerObj => {
-                    this.setMarkerVisible(markerObj.marker, true);
+                    this.setMarkerVisible(markerObj.marker, true, markerObj.label);
                 });
             }
             visiblePlaces = this.travelList;
@@ -5354,7 +5712,8 @@ class TravelPlanner {
             this.markers.forEach(markerObj => {
                 const city = this.extractCityFromAddress(markerObj.place.address);
                 if (city === this.currentCityFilter) {
-                    this.setMarkerVisible(markerObj.marker, true);
+                    const labelObj = this.placeLabels.find(l => l.id.toString() === markerObj.id.toString());
+                    this.setMarkerVisible(markerObj.marker, true, labelObj ? labelObj.label : null);
                     visiblePlaces.push(markerObj.place);
                 }
             });
@@ -5363,7 +5722,7 @@ class TravelPlanner {
                 this.pendingMarkers.forEach(markerObj => {
                     const city = this.extractCityFromAddress(markerObj.place.address);
                     if (city === this.currentCityFilter) {
-                        this.setMarkerVisible(markerObj.marker, true);
+                        this.setMarkerVisible(markerObj.marker, true, markerObj.label);
                         if (!visiblePlaces.find(p => p.id === markerObj.place.id)) {
                             visiblePlaces.push(markerObj.place);
                         }
@@ -5384,14 +5743,15 @@ class TravelPlanner {
     applyCityFilterWithoutFitting() {
         if (!this.isMapLoaded) return;
 
-        // 隐藏所有标记（游玩点）
+        // 隐藏所有标记（游玩点及其标签）
         this.markers.forEach(markerObj => {
-            this.setMarkerVisible(markerObj.marker, false);
+            const labelObj = this.placeLabels.find(l => l.id.toString() === markerObj.id.toString());
+            this.setMarkerVisible(markerObj.marker, false, labelObj ? labelObj.label : null);
         });
 
-        // 隐藏所有待定点标记
+        // 隐藏所有待定点标记及其标签
         this.pendingMarkers.forEach(markerObj => {
-            this.setMarkerVisible(markerObj.marker, false);
+            this.setMarkerVisible(markerObj.marker, false, markerObj.label);
         });
 
         // 根据过滤条件显示标记
@@ -5400,12 +5760,13 @@ class TravelPlanner {
         if (this.currentCityFilter === 'all') {
             // 显示所有游玩点标记
             this.markers.forEach(markerObj => {
-                this.setMarkerVisible(markerObj.marker, true);
+                const labelObj = this.placeLabels.find(l => l.id.toString() === markerObj.id.toString());
+                this.setMarkerVisible(markerObj.marker, true, labelObj ? labelObj.label : null);
             });
             // 显示所有待定点标记（如果当前显示待定点）
             if (this.showPendingPlaces) {
                 this.pendingMarkers.forEach(markerObj => {
-                    this.setMarkerVisible(markerObj.marker, true);
+                    this.setMarkerVisible(markerObj.marker, true, markerObj.label);
                 });
             }
             visiblePlaces = this.travelList;
@@ -5414,7 +5775,8 @@ class TravelPlanner {
             this.markers.forEach(markerObj => {
                 const city = this.extractCityFromAddress(markerObj.place.address);
                 if (city === this.currentCityFilter) {
-                    this.setMarkerVisible(markerObj.marker, true);
+                    const labelObj = this.placeLabels.find(l => l.id.toString() === markerObj.id.toString());
+                    this.setMarkerVisible(markerObj.marker, true, labelObj ? labelObj.label : null);
                     visiblePlaces.push(markerObj.place);
                 }
             });
@@ -5423,7 +5785,7 @@ class TravelPlanner {
                 this.pendingMarkers.forEach(markerObj => {
                     const city = this.extractCityFromAddress(markerObj.place.address);
                     if (city === this.currentCityFilter) {
-                        this.setMarkerVisible(markerObj.marker, true);
+                        this.setMarkerVisible(markerObj.marker, true, markerObj.label);
                         if (!visiblePlaces.find(p => p.id === markerObj.place.id)) {
                             visiblePlaces.push(markerObj.place);
                         }
@@ -5516,6 +5878,9 @@ class TravelPlanner {
 
         // 应用当前的城市过滤（不调整地图视角）
         this.applyCityFilterWithoutFitting();
+
+        // 创建完成后调整标签位置，避免重叠
+        setTimeout(() => this.adjustLabels(), 500);
     }
 
     // 调整地图视野以适应指定的地点
@@ -5729,8 +6094,7 @@ class TravelPlanner {
                 this.updateTravelList();
                 this.calculateDistancesWithDebounce();
 
-                // 重新添加标记和绘制路线
-                this.travelList.forEach(place => this.addMarker(place));
+                // 重新绘制路线
                 if (this.travelList.length >= 2) {
                     this.drawRoute();
                 }
