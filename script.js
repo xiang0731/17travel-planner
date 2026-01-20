@@ -955,27 +955,6 @@ class TravelPlanner {
                             }
                         }
 
-                        onRemove() {
-                            if (this.div) {
-                                this.div.parentNode.removeChild(this.div);
-                                this.div = null;
-                            }
-                        }
-
-                        hide() {
-                            if (this.div) {
-                                this.div.style.opacity = '0';
-                                this.div.style.pointerEvents = 'none';
-                            }
-                        }
-
-                        show() {
-                            if (this.div) {
-                                this.div.style.opacity = '1';
-                                this.div.style.pointerEvents = 'auto';
-                            }
-                        }
-
                         setText(text) {
                             this.text = text;
                             if (this.div) {
