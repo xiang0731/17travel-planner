@@ -75,7 +75,8 @@ class TravelPlanner {
             apiKeys: {
                 google: '', // Google Maps API密钥
                 gaode: '', // 高德地图API密钥
-                bing: '' // Bing Maps API密钥
+                bing: '', // Bing Maps API密钥
+                tianditu: '' // 天地图API密钥
             },
             preferences: {
                 openInNewTab: true, // 在新标签页中打开导航
@@ -263,7 +264,7 @@ class TravelPlanner {
 
                     // 确保API密钥设置结构完整
                     if (!this.settings.apiKeys) {
-                        this.settings.apiKeys = { google: '', gaode: '', bing: '' };
+                        this.settings.apiKeys = { google: '', gaode: '', bing: '', tianditu: '' };
                     }
 
                     // 确保偏好设置结构完整
@@ -307,6 +308,8 @@ class TravelPlanner {
             this.init();
         } else if (selectedMapApi === 'gaode' && typeof AMap !== 'undefined') {
             this.init();
+        } else if (selectedMapApi === 'tianditu' && typeof T !== 'undefined' && T.Map) {
+            this.init();
         } else if (selectedMapApi === 'bing' && typeof Microsoft !== 'undefined') {
             this.init();
         } else {
@@ -329,6 +332,9 @@ class TravelPlanner {
         } else if (selectedMapApi === 'gaode' && apiKey) {
             console.log('🔑 使用高德地图API作为地图显示服务...');
             this.loadGaodeMapScript(apiKey);
+        } else if (selectedMapApi === 'tianditu' && apiKey) {
+            console.log('🔑 使用天地图API作为地图显示服务...');
+            this.loadTiandituMapScript(apiKey);
         } else if (selectedMapApi === 'bing' && apiKey) {
             console.log('🔑 使用Bing Maps API作为地图显示服务（暂未实现）...');
             // TODO: 实现Bing Maps API加载
@@ -435,6 +441,66 @@ class TravelPlanner {
         document.head.appendChild(script);
     }
 
+    // 动态加载天地图脚本
+    loadTiandituMapScript(apiKey) {
+        console.log(`🗺️ 开始加载天地图API...`);
+
+        // 检查是否已经存在天地图脚本
+        const existingScript = document.querySelector('script[src*="api.tianditu.gov.cn/api"]');
+        if (existingScript) {
+            existingScript.remove();
+        }
+
+        const script = document.createElement('script');
+        script.src = `https://api.tianditu.gov.cn/api?v=4.0&tk=${encodeURIComponent(apiKey)}`;
+        script.async = true;
+        script.defer = true;
+
+        script.onload = () => {
+            console.log('✅ 天地图API脚本加载成功');
+
+            let attempts = 0;
+            const checkTianditu = () => {
+                attempts++;
+
+                if (typeof T !== 'undefined' && T.Map) {
+                    console.log('🗺️ 天地图T对象已可用，初始化应用');
+
+                    const banner = document.getElementById('api-config-banner');
+                    if (banner) {
+                        document.body.removeChild(banner);
+                        document.body.style.paddingTop = '0';
+                    }
+
+                    if (window.app && window.app.settings) {
+                        window.app.init();
+                    } else {
+                        window.app = new TravelPlanner();
+                    }
+                    return;
+                }
+
+                if (attempts < 80) {
+                    setTimeout(checkTianditu, 50);
+                } else {
+                    console.error('❌ 天地图API对象初始化超时');
+                    this.showToast('天地图API加载超时，请检查API密钥配置');
+                    this.initDemoMode();
+                }
+            };
+
+            setTimeout(checkTianditu, 100);
+        };
+
+        script.onerror = () => {
+            console.error('❌ 天地图API加载失败，可能是API密钥错误');
+            this.showToast('天地图API加载失败，请检查API密钥配置');
+            this.initDemoMode();
+        };
+
+        document.head.appendChild(script);
+    }
+
     // 初始化应用
     init() {
         console.log('🎯 开始主要初始化流程...');
@@ -465,6 +531,8 @@ class TravelPlanner {
             this.initGoogleMap();
         } else if (selectedMapApi === 'gaode' && typeof AMap !== 'undefined') {
             this.initAMap();
+        } else if (selectedMapApi === 'tianditu' && typeof T !== 'undefined' && T.Map) {
+            this.initTiandituMap();
         } else if (selectedMapApi === 'bing' && typeof Microsoft !== 'undefined') {
             // TODO: 实现Bing Maps初始化
             this.initDemoMap();
@@ -511,7 +579,8 @@ class TravelPlanner {
             const apiNameMap = {
                 'google': 'Google Maps',
                 'gaode': '高德地图',
-                'bing': 'Bing Maps'
+                'bing': 'Bing Maps',
+                'tianditu': '天地图'
             };
             const apiDisplayName = apiNameMap[selectedMapApi] || selectedMapApi;
 
@@ -529,7 +598,7 @@ class TravelPlanner {
                     font-size: 12px;
                     font-weight: 600;
                     transition: all 0.3s ease;
-                " onmouseover="this.style.background='rgba(255, 255, 255, 0.3)'" 
+                " onmouseover="this.style.background='rgba(255, 255, 255, 0.3)'"
                    onmouseout="this.style.background='rgba(255, 255, 255, 0.2)'">
                     立即配置
                 </button>
@@ -847,7 +916,7 @@ class TravelPlanner {
                                 opacity: 0;
                             `;
                             this.line.innerHTML = `
-                                <line x1="0" y1="0" x2="0" y2="0" 
+                                <line x1="0" y1="0" x2="0" y2="0"
                                     style="stroke: rgba(102, 126, 234, 0.6); stroke-width: 2; stroke-dasharray: 4,3;" />
                             `;
 
@@ -897,17 +966,17 @@ class TravelPlanner {
                             if (this.offsetX !== 0 || this.offsetY > 0) {
                                 this.line.style.opacity = '1';
                                 const lineEl = this.line.querySelector('line');
-                                
+
                                 // 设置 SVG 容器位置
                                 this.line.style.left = Math.min(baseUrlX, labelX) + 'px';
                                 this.line.style.top = Math.min(baseUrlY, labelY + 25) + 'px';
-                                
+
                                 // 设置线条起点和终点（相对于 SVG 容器）
                                 const x1 = baseUrlX - Math.min(baseUrlX, labelX);
                                 const y1 = baseUrlY - Math.min(baseUrlY, labelY + 25);
                                 const x2 = labelX - Math.min(baseUrlX, labelX);
                                 const y2 = (labelY + 25) - Math.min(baseUrlY, labelY + 25);
-                                
+
                                 lineEl.setAttribute('x1', x1);
                                 lineEl.setAttribute('y1', y1);
                                 lineEl.setAttribute('x2', x2);
@@ -1095,6 +1164,73 @@ class TravelPlanner {
         }
     }
 
+    // 初始化天地图
+    initTiandituMap() {
+        try {
+            if (typeof T !== 'undefined') {
+                // 计算初始地图中心和缩放级别
+                const mapConfig = this.calculateInitialMapConfig();
+
+                // 创建天地图实例
+                this.map = new T.Map("mapContainer");
+
+                // 设置中心点和缩放级别
+                const centerLngLat = new T.LngLat(mapConfig.center.lng, mapConfig.center.lat);
+                this.map.centerAndZoom(centerLngLat, mapConfig.zoom);
+
+                // 允许鼠标滚轮缩放
+                this.map.enableScrollWheelZoom();
+
+                this.isMapLoaded = true;
+                console.log('天地图初始化成功');
+
+                // 移除API配置提示横幅（如果存在）
+                const banner = document.getElementById('api-config-banner');
+                if (banner) {
+                    document.body.removeChild(banner);
+                    document.body.style.paddingTop = '0';
+                }
+
+                // 地图点击事件
+                this.map.addEventListener('click', (e) => {
+                    const lng = e.lnglat.getLng();
+                    const lat = e.lnglat.getLat();
+                    this.onMapClick(lng, lat);
+                });
+
+                // 监听缩放和拖拽事件
+                this.map.addEventListener('zoomend', () => {
+                    this.adjustLabels();
+                });
+                this.map.addEventListener('moveend', () => {
+                    this.adjustLabels();
+                });
+
+                // 添加基础控件（不同天地图版本可能暴露的控件略有差异）
+                if (T.Control && T.Control.Zoom) {
+                    this.map.addControl(new T.Control.Zoom());
+                }
+                if (T.Control && T.Control.Scale) {
+                    this.map.addControl(new T.Control.Scale());
+                }
+
+                // 延迟绘制路线，确保地图完全加载
+                setTimeout(() => {
+                    this.initializeMapContent();
+                    this.updateSatelliteButtonState();
+                }, 500);
+
+                this.showToast('✅ 天地图加载成功！');
+
+            } else {
+                throw new Error('天地图API未加载');
+            }
+        } catch (error) {
+            console.error('天地图初始化失败:', error);
+            this.initDemoMap();
+        }
+    }
+
     // 计算初始地图配置（中心点和缩放级别）
     calculateInitialMapConfig() {
         // 获取当前有效地点（非待定且有坐标）
@@ -1132,6 +1268,10 @@ class TravelPlanner {
         if (!this.isMapLoaded) return;
 
         console.log('🎯 初始化地图内容：添加标记和绘制路线');
+
+        const activePlaces = this.travelList.filter(place =>
+            !place.isPending && !place.isBlank && place.lat && place.lng
+        );
 
         // 重新创建所有标记（只为激活的地点）
         this.recreateMarkers();
@@ -1232,7 +1372,8 @@ class TravelPlanner {
         const apiNameMap = {
             'google': 'Google Maps',
             'gaode': '高德地图',
-            'bing': 'Bing Maps'
+            'bing': 'Bing Maps',
+            'tianditu': '天地图'
         };
         const selectedApiName = apiNameMap[selectedMapApi] || selectedMapApi;
 
@@ -1270,7 +1411,33 @@ class TravelPlanner {
 
     // 反向地理编码
     reverseGeocode(lng, lat, callback) {
-        if (this.geocoder) {
+        const selectedMapApi = this.settings.selectedMapApi;
+
+        if (selectedMapApi === 'tianditu' && typeof T !== 'undefined' && T.Geocoder) {
+            try {
+                this.tiandituGeocoder = this.tiandituGeocoder || new T.Geocoder();
+                this.tiandituGeocoder.getLocation(new T.LngLat(lng, lat), (result) => {
+                    const address = result && typeof result.getAddress === 'function'
+                        ? result.getAddress()
+                        : '';
+                    const component = result && typeof result.getAddressComponent === 'function'
+                        ? result.getAddressComponent()
+                        : null;
+                    const poiName = component && component.poi ? component.poi : '';
+
+                    callback({
+                        name: poiName || address || '位置点',
+                        address: address || `${lng.toFixed(6)}, ${lat.toFixed(6)}`
+                    });
+                });
+            } catch (error) {
+                console.warn('天地图反向地理编码失败，使用坐标信息:', error);
+                callback({
+                    name: '位置点',
+                    address: `${lng.toFixed(6)}, ${lat.toFixed(6)}`
+                });
+            }
+        } else if (this.geocoder) {
             this.geocoder.geocode({
                 location: { lat: lat, lng: lng }
             }, (results, status) => {
@@ -1337,7 +1504,6 @@ class TravelPlanner {
 
         const selectedMapApi = this.settings.selectedMapApi;
         console.log(`🔍 开始搜索 - API: ${selectedMapApi}, 关键字: ${keyword}`);
-        console.log('🔍 当前设置:', this.settings);
 
         // 详细的API状态检查
         console.log('🔍 API状态检查:');
@@ -1352,6 +1518,9 @@ class TravelPlanner {
         } else if (selectedMapApi === 'gaode') {
             console.log('🗺️ 使用高德Web服务API搜索');
             this.searchWithGaode(keyword);
+        } else if (selectedMapApi === 'tianditu') {
+            console.log('🗺️ 使用天地图搜索');
+            this.searchWithTianditu(keyword);
         } else if (selectedMapApi === 'bing') {
             console.log('🌐 使用Bing搜索（暂未实现）');
             this.searchWithBing(keyword);
@@ -1359,6 +1528,89 @@ class TravelPlanner {
             console.warn('⚠️ 当前地图API不支持搜索或未加载，使用演示模式');
             console.warn('  原因：selectedMapApi =', selectedMapApi, ', this.placesService =', !!this.placesService);
             this.searchDemo(keyword);
+        }
+    }
+
+    // 使用天地图API搜索
+    searchWithTianditu(keyword) {
+        if (!this.map || typeof T === 'undefined') {
+            console.warn('⚠️ 天地图尚未初始化完毕');
+            this.searchDemo(keyword);
+            return;
+        }
+
+        const cachedResults = this.getCachedSearchResult(keyword);
+        if (cachedResults) {
+            this.displaySearchResults(cachedResults);
+            return;
+        }
+
+        try {
+            const config = {
+                pageCapacity: 20,
+                onSearchComplete: (result) => {
+                    if (!result || typeof result.getResultType !== 'function') {
+                        console.error('⚠️ 天地图API返回空结果或异常:', result);
+                        const resultsContainer = document.getElementById('searchResults');
+                        resultsContainer.innerHTML = `<div style="padding: 10px; text-align: center; color: #ff4d4f;">未能获取到搜索结果，请稍后重试或更换关键词</div>`;
+                        return;
+                    }
+
+                    const results = [];
+                    const resultType = parseInt(result.getResultType());
+
+                    const appendResult = (item, fallbackAddress = '无详细地址') => {
+                        if (!item || !item.lonlat) return;
+
+                        const lonlat = String(item.lonlat).trim().split(/[\s,]+/);
+                        const lng = Number(lonlat[0]);
+                        const lat = Number(lonlat[1]);
+                        if (!Number.isFinite(lng) || !Number.isFinite(lat)) return;
+
+                        results.push({
+                            name: item.name || item.adminName || keyword,
+                            address: item.address || item.phone || fallbackAddress,
+                            lng,
+                            lat,
+                            source: 'tianditu',
+                            id: item.hotPointID || item.adminCode || `tianditu_${Date.now()}_${results.length}`
+                        });
+                    };
+
+                    if (resultType === 1) { // POI
+                        const pois = result.getPois() || [];
+                        pois.forEach(poi => appendResult(poi));
+                    } else if (resultType === 3) { // Administrative area
+                        const area = result.getArea ? result.getArea() : null;
+                        (Array.isArray(area) ? area : [area]).forEach(item => appendResult(item, '行政区域'));
+                    } else if (resultType === 2) { // Statistics / recommended administrative areas
+                        const statistics = result.getStatistics ? result.getStatistics() : null;
+                        (Array.isArray(statistics) ? statistics : [statistics]).filter(Boolean).forEach(item => {
+                            const adminItems = [
+                                ...(Array.isArray(item.priorityCitys) ? item.priorityCitys : []),
+                                ...(Array.isArray(item.allAdmins) ? item.allAdmins : [])
+                            ];
+                            adminItems.forEach(admin => appendResult(admin, '行政区域'));
+                        });
+                    }
+
+                    if (results.length > 0) {
+                        this.cacheSearchResult(keyword, results);
+                        this.displaySearchResults(results);
+                    } else {
+                        console.log('Tianditu unhandled response type:', resultType, result);
+                        const resultsContainer = document.getElementById('searchResults');
+                        resultsContainer.innerHTML = `<div style="padding: 10px; text-align: center; color: #666; font-size: 12px;">未找到匹配的地点<br>请尝试其他关键词</div>`;
+                    }
+                }
+            };
+
+            const localSearch = new T.LocalSearch(this.map, config);
+            localSearch.search(keyword);
+        } catch (error) {
+            console.error('天地图搜索出错:', error);
+            const resultsContainer = document.getElementById('searchResults');
+            resultsContainer.innerHTML = '<div style="padding: 10px; text-align: center; color: #ff4d4f;">搜索请求失败，请稍后重试</div>';
         }
     }
 
@@ -1783,10 +2035,12 @@ class TravelPlanner {
             const googleInput = document.getElementById('googleApiKeyInput');
             const gaodeInput = document.getElementById('gaodeApiKeyInput');
             const bingInput = document.getElementById('bingApiKeyInput');
+            const tiandituInput = document.getElementById('tiandituApiKeyInput');
 
             if (googleInput) googleInput.value = this.settings.apiKeys.google || '';
             if (gaodeInput) gaodeInput.value = this.settings.apiKeys.gaode || '';
             if (bingInput) bingInput.value = this.settings.apiKeys.bing || '';
+            if (tiandituInput) tiandituInput.value = this.settings.apiKeys.tianditu || '';
         }
 
         // 加载导航偏好设置
@@ -1814,8 +2068,8 @@ class TravelPlanner {
     // 保存设置
     saveSettings() {
         // 在更新设置之前，先记录当前的API密钥和地图API选择
-        const currentGoogleApiKey = this.getApiKey('google');
         const currentSelectedMapApi = this.settings.selectedMapApi;
+        const currentSelectedApiKey = this.getApiKey(currentSelectedMapApi);
 
         // 保存地图API选择设置
         const selectedMapApi = document.querySelector('input[name="selectedMapApi"]:checked');
@@ -1833,6 +2087,7 @@ class TravelPlanner {
         const googleInput = document.getElementById('googleApiKeyInput');
         const gaodeInput = document.getElementById('gaodeApiKeyInput');
         const bingInput = document.getElementById('bingApiKeyInput');
+        const tiandituInput = document.getElementById('tiandituApiKeyInput');
 
         if (!this.settings.apiKeys) {
             this.settings.apiKeys = {};
@@ -1841,6 +2096,7 @@ class TravelPlanner {
         if (googleInput) this.settings.apiKeys.google = googleInput.value.trim();
         if (gaodeInput) this.settings.apiKeys.gaode = gaodeInput.value.trim();
         if (bingInput) this.settings.apiKeys.bing = bingInput.value.trim();
+        if (tiandituInput) this.settings.apiKeys.tianditu = tiandituInput.value.trim();
 
         // 保存导航偏好设置
         const openInNewTabCheckbox = document.getElementById('openInNewTab');
@@ -1869,50 +2125,40 @@ class TravelPlanner {
         this.saveData();
 
         // 检查地图API相关变化
-        const newGoogleApiKey = this.settings.apiKeys.google;
         const newSelectedMapApi = this.settings.selectedMapApi;
+        const newSelectedApiKey = this.getApiKey(newSelectedMapApi);
+        const isSelectedMapApiLoaded = () => {
+            switch (newSelectedMapApi) {
+                case 'google':
+                    return typeof google !== 'undefined' && google.maps;
+                case 'gaode':
+                    return typeof AMap !== 'undefined';
+                case 'tianditu':
+                    return typeof T !== 'undefined' && T.Map;
+                case 'bing':
+                    return typeof Microsoft !== 'undefined';
+                default:
+                    return false;
+            }
+        };
 
         // 检查是否需要重新加载地图
         const needsReload = (
-            // API密钥变化
-            newGoogleApiKey !== currentGoogleApiKey ||
             // 地图API选择变化
             newSelectedMapApi !== currentSelectedMapApi ||
-            // 选择了Google但之前没有加载Google Maps
-            (newSelectedMapApi === 'google' && newGoogleApiKey && typeof google === 'undefined') ||
-            // 移除了API密钥但还在使用该API
-            (!newGoogleApiKey && newSelectedMapApi === 'google' && typeof google !== 'undefined')
+            // 当前选中地图服务的API密钥变化
+            newSelectedApiKey !== currentSelectedApiKey ||
+            // 选择了真实地图API但脚本尚未加载
+            (newSelectedApiKey && !isSelectedMapApiLoaded()) ||
+            // 当前地图正在使用真实API，但选中服务的密钥被移除
+            (!newSelectedApiKey && this.isMapLoaded)
         );
 
         if (needsReload) {
-            if (newSelectedMapApi === 'google' && newGoogleApiKey) {
-                if (typeof google === 'undefined') {
-                    // 需要加载Google Maps
-                    this.showToast('设置已保存，正在加载Google Maps...');
-                    setTimeout(() => {
-                        // 移除API配置提示横幅
-                        const banner = document.getElementById('api-config-banner');
-                        if (banner) {
-                            document.body.removeChild(banner);
-                            document.body.style.paddingTop = '0';
-                        }
-                        // 加载Google Maps
-                        this.loadGoogleMapsScript(newGoogleApiKey);
-                    }, 1000);
-                } else {
-                    // 已经有Google Maps，但API密钥或设置变了，需要重新加载
-                    this.showToast('设置已保存，配置已更新，页面将刷新以应用新配置...');
-                    setTimeout(() => {
-                        window.location.reload();
-                    }, 2000);
-                }
-            } else {
-                // 选择了其他API或移除了配置，需要刷新页面
-                this.showToast('设置已保存，页面将刷新以应用更改...');
-                setTimeout(() => {
-                    window.location.reload();
-                }, 2000);
-            }
+            this.showToast('设置已保存，页面将刷新以应用更改...');
+            setTimeout(() => {
+                window.location.reload();
+            }, 2000);
         } else {
             this.showToast('设置已保存');
         }
@@ -1923,14 +2169,11 @@ class TravelPlanner {
     // 获取API密钥
     getApiKey(provider) {
         console.log(`🔍 获取API密钥 - 提供商: ${provider}`);
-        console.log(`📋 当前设置:`, this.settings);
 
         if (!this.settings.apiKeys) {
             console.log('❌ 没有apiKeys配置');
             return null;
         }
-
-        console.log(`🔑 apiKeys配置:`, this.settings.apiKeys);
 
         let apiKey = null;
         switch (provider) {
@@ -1939,6 +2182,9 @@ class TravelPlanner {
                 break;
             case 'gaode':
                 apiKey = this.settings.apiKeys.gaode || null;
+                break;
+            case 'tianditu':
+                apiKey = this.settings.apiKeys.tianditu || null;
                 break;
             case 'bing':
                 apiKey = this.settings.apiKeys.bing || null;
@@ -2207,6 +2453,22 @@ class TravelPlanner {
                     { message: '优化标签排列算法，优先就近显示并防止遮挡图标', type: 'optimize' },
                     { message: '修复由于初始化逻辑冗余导致的游玩点名称重复显示问题', type: 'fix' }
                 ]
+            },
+            // 1.14.0
+            {
+                updates: [
+                    { message: '新增天地图API集成，支持使用天地图作为地图显示和路线规划服务', type: 'feature' },
+                    { message: '在设置中增加天地图API密钥配置', type: 'feature' },
+                    { message: '支持使用天地图进行导航', type: 'feature' }
+                ]
+            },
+            // 1.15.0
+            {
+                updates: [
+                    { message: '新增版本化应用壳缓存，加快重复访问时的静态资源加载', type: 'feature' },
+                    { message: '移除地图初始化前的固定等待时间，页面就绪后立即加载地图SDK', type: 'optimize' },
+                    { message: '根据所选地图服务提前建立网络连接，缩短地图首次出现时间', type: 'optimize' }
+                ]
             }
         ];
 
@@ -2466,7 +2728,7 @@ class TravelPlanner {
         const escapedDisplayName = displayName.replace(/'/g, "\\'");
         const escapedAddress = this.escapeHTML(place.address).replace(/'/g, "\\'");
         const itemClass = isPending ? 'pending-item' : `travel-item ${place.isBlank ? 'blank-item' : ''}`;
-        
+
         let actionsHTML = '';
         if (isPending) {
             actionsHTML = `
@@ -2829,6 +3091,8 @@ class TravelPlanner {
             } else if (selectedMapApi === 'gaode' && typeof AMap !== 'undefined') {
                 this.map.setCenter([lng, lat]); // 高德地图使用 [经度, 纬度] 格式
                 this.map.setZoom(16);
+            } else if (selectedMapApi === 'tianditu' && typeof T !== 'undefined') {
+                this.map.centerAndZoom(new T.LngLat(lng, lat), 16);
             } else {
                 console.warn('地图API未加载，无法在地图上定位');
                 this.showToast(`地点坐标: ${lng.toFixed(6)}, ${lat.toFixed(6)}`);
@@ -2907,6 +3171,10 @@ class TravelPlanner {
                 // Bing地图需要获取当前位置
                 this.navigateWithGeolocation(lng, lat, name, 'bing');
                 break;
+            case 'tianditu':
+                // 天地图需要获取当前位置
+                this.navigateWithGeolocation(lng, lat, name, 'tianditu');
+                break;
             default:
                 if (isMobile) {
                     // 移动设备：默认使用优化的高德地图URI（省略from参数）
@@ -2965,6 +3233,11 @@ class TravelPlanner {
                 url = `https://www.bing.com/maps?cp=${lat}~${lng}&lvl=16`;
                 appName = 'Bing 地图';
                 break;
+            case 'tianditu':
+                // 天地图：显示指定位置
+                url = `https://map.tianditu.gov.cn/?center=${lng},${lat}&zoom=16`;
+                appName = '天地图';
+                break;
             default:
                 // 默认使用高德地图
                 url = `https://uri.amap.com/marker?position=${lng},${lat}&name=${encodeURIComponent(name)}&src=17travelplanner&coordinate=gaode&callnative=1`;
@@ -3016,6 +3289,10 @@ class TravelPlanner {
                         case 'bing':
                             url = `https://www.bing.com/maps/directions?rtp=pos.${currentLat}_${currentLng}~pos.${lat}_${lng}`;
                             appName = 'Bing 地图';
+                            break;
+                        case 'tianditu':
+                            url = `https://map.tianditu.gov.cn/?orig=${currentLng},${currentLat}&dest=${lng},${lat}&type=route`;
+                            appName = '天地图';
                             break;
                     }
 
@@ -3221,6 +3498,8 @@ class TravelPlanner {
             this.calculateRealDistancesWithGoogle();
         } else if (selectedMapApi === 'gaode') {
             this.calculateRealDistancesWithGaode();
+        } else if (selectedMapApi === 'tianditu') {
+            this.calculateRealDistancesWithTianditu();
         } else {
             console.warn('⚠️ 当前地图API不支持距离计算，使用直线距离');
             this.calculateStraightLineDistances();
@@ -3547,6 +3826,173 @@ class TravelPlanner {
         }
     }
 
+    // 使用天地图路线服务计算距离
+    async calculateRealDistancesWithTianditu() {
+        const activePlaces = this.travelList.filter(place => !place.isPending);
+        const apiKey = this.getApiKey('tianditu');
+
+        if (!apiKey) {
+            console.error('❌ 天地图API密钥未配置，使用直线距离');
+            this.calculateStraightLineDistances();
+            return;
+        }
+
+        let totalDistanceKm = 0;
+        let totalDurationMin = 0;
+        let completedCalculations = 0;
+        let totalCalculations = 0;
+
+        for (let i = 0; i < activePlaces.length; i++) {
+            const currentPlace = activePlaces[i];
+
+            if (!currentPlace.lat || !currentPlace.lng || currentPlace.isBlank) {
+                const distanceElement = document.getElementById(`distance-${currentPlace.id}`);
+                const durationElement = document.getElementById(`duration-${currentPlace.id}`);
+
+                if (distanceElement) {
+                    distanceElement.textContent = currentPlace.isBlank ? '空白地点' : '无地理信息';
+                }
+                if (durationElement) {
+                    durationElement.textContent = '-';
+                }
+                continue;
+            }
+
+            let prevNonBlankPlace = null;
+            for (let j = i - 1; j >= 0; j--) {
+                if (activePlaces[j].lat && activePlaces[j].lng && !activePlaces[j].isBlank) {
+                    prevNonBlankPlace = activePlaces[j];
+                    break;
+                }
+            }
+
+            if (prevNonBlankPlace) {
+                totalCalculations++;
+            }
+        }
+
+        if (totalCalculations === 0) {
+            this.updateDistanceSummary(0, 0);
+            return;
+        }
+
+        for (let i = 0; i < activePlaces.length; i++) {
+            const currentPlace = activePlaces[i];
+
+            if (!currentPlace.lat || !currentPlace.lng || currentPlace.isBlank) {
+                continue;
+            }
+
+            let prevNonBlankPlace = null;
+            for (let j = i - 1; j >= 0; j--) {
+                if (activePlaces[j].lat && activePlaces[j].lng && !activePlaces[j].isBlank) {
+                    prevNonBlankPlace = activePlaces[j];
+                    break;
+                }
+            }
+
+            if (!prevNonBlankPlace) {
+                continue;
+            }
+
+            try {
+                const result = await this.calculateTiandituDistance(prevNonBlankPlace, currentPlace, apiKey);
+                completedCalculations++;
+
+                if (result.success) {
+                    totalDistanceKm += result.distance;
+                    totalDurationMin += result.duration;
+
+                    const distanceElement = document.getElementById(`distance-${currentPlace.id}`);
+                    const durationElement = document.getElementById(`duration-${currentPlace.id}`);
+
+                    if (distanceElement) {
+                        distanceElement.textContent = `${result.distance.toFixed(1)} 公里`;
+                    }
+                    if (durationElement) {
+                        durationElement.textContent = `${Math.round(result.duration)} 分钟`;
+                    }
+                } else {
+                    const straightDistance = this.calculateStraightDistance(
+                        prevNonBlankPlace.lat, prevNonBlankPlace.lng,
+                        currentPlace.lat, currentPlace.lng
+                    );
+                    totalDistanceKm += straightDistance;
+                    totalDurationMin += (straightDistance / 50) * 60;
+
+                    const distanceElement = document.getElementById(`distance-${currentPlace.id}`);
+                    const durationElement = document.getElementById(`duration-${currentPlace.id}`);
+
+                    if (distanceElement) {
+                        distanceElement.textContent = `${straightDistance.toFixed(1)} 公里 (直线)`;
+                    }
+                    if (durationElement) {
+                        durationElement.textContent = `约${Math.round(straightDistance / 50 * 60)} 分钟`;
+                    }
+                }
+
+                if (completedCalculations === totalCalculations) {
+                    this.updateDistanceSummary(totalDistanceKm, totalDurationMin / 60);
+                }
+            } catch (error) {
+                console.error('❌ 天地图距离计算出错:', error);
+                completedCalculations++;
+
+                const straightDistance = this.calculateStraightDistance(
+                    prevNonBlankPlace.lat, prevNonBlankPlace.lng,
+                    currentPlace.lat, currentPlace.lng
+                );
+                totalDistanceKm += straightDistance;
+                totalDurationMin += (straightDistance / 50) * 60;
+
+                const distanceElement = document.getElementById(`distance-${currentPlace.id}`);
+                const durationElement = document.getElementById(`duration-${currentPlace.id}`);
+
+                if (distanceElement) {
+                    distanceElement.textContent = `${straightDistance.toFixed(1)} 公里 (直线)`;
+                }
+                if (durationElement) {
+                    durationElement.textContent = `约${Math.round(straightDistance / 50 * 60)} 分钟`;
+                }
+
+                if (completedCalculations === totalCalculations) {
+                    this.updateDistanceSummary(totalDistanceKm, totalDurationMin / 60);
+                }
+            }
+        }
+    }
+
+    async calculateTiandituDistance(fromPlace, toPlace, apiKey) {
+        const cachedDistance = this.getCachedDistance(fromPlace, toPlace);
+        if (cachedDistance) {
+            return {
+                success: true,
+                distance: cachedDistance.distance,
+                duration: cachedDistance.duration
+            };
+        }
+
+        try {
+            const routeResult = await this.getTiandituRoute(fromPlace, toPlace, apiKey);
+            if (!routeResult || !routeResult.success) {
+                return { success: false };
+            }
+
+            const distance = routeResult.distance;
+            const duration = routeResult.duration;
+            this.cacheDistance(fromPlace, toPlace, distance, duration);
+
+            return {
+                success: true,
+                distance,
+                duration
+            };
+        } catch (error) {
+            console.error('❌ 调用天地图路径规划API失败:', error);
+            return { success: false };
+        }
+    }
+
     // 计算直线距离（备用方案）
     calculateStraightLineDistances() {
         let totalDistance = 0;
@@ -3665,6 +4111,9 @@ class TravelPlanner {
         } else if (selectedMapApi === 'gaode' && typeof AMap !== 'undefined') {
             // 高德地图标记
             marker = this.createGaodeMarker(place, number, displayName, index);
+        } else if (selectedMapApi === 'tianditu' && typeof T !== 'undefined') {
+            // 天地图标记
+            marker = this.createTiandituMarker(place, number, displayName, index);
         } else {
             console.warn('⚠️ 无法创建标记：地图API未加载');
             return;
@@ -3815,6 +4264,106 @@ class TravelPlanner {
         return labelMarker;
     }
 
+    createTiandituMarker(place, number, displayName, index) {
+        const markerSvg = `
+            <svg width="40" height="50" viewBox="0 0 40 50" xmlns="http://www.w3.org/2000/svg">
+                <ellipse cx="20" cy="47" rx="8" ry="3" fill="rgba(0,0,0,0.3)"/>
+                <path d="M20 3C13.4 3 8 8.4 8 15C8 24.75 20 47 20 47C20 47 32 24.75 32 15C32 8.4 26.6 3 20 3Z" fill="#e74c3c" stroke="#ffffff" stroke-width="2"/>
+                <circle cx="20" cy="15" r="6" fill="#ffffff"/>
+                <text x="20" y="19" text-anchor="middle" font-family="Arial, sans-serif" font-size="12" font-weight="bold" fill="#e74c3c">${number}</text>
+            </svg>
+        `;
+
+        const icon = new T.Icon({
+            iconUrl: 'data:image/svg+xml;charset=UTF-8,' + encodeURIComponent(markerSvg.trim()),
+            iconSize: new T.Point(40, 50),
+            iconAnchor: new T.Point(20, 50)
+        });
+
+        const marker = new T.Marker(new T.LngLat(place.lng, place.lat), {
+            icon: icon,
+            title: `${number}. ${displayName}`,
+            zIndexOffset: 1000 + index
+        });
+
+        this.map.addOverLay(marker);
+
+        // 绑定点击事件，打开信息窗体
+        marker.addEventListener("click", () => {
+            this.showPlaceModal({
+                name: place.name,
+                address: place.address,
+                lng: place.lng,
+                lat: place.lat,
+                customName: place.customName,
+                notes: place.notes,
+                isPending: false
+            });
+        });
+
+        // 创建标签
+        this.createTiandituLabel(place, number, displayName);
+
+        return marker;
+    }
+
+    // 创建天地图标签
+    createTiandituLabel(place, number, displayName) {
+        const labelText = `
+                <div style="
+                    background: linear-gradient(135deg, rgba(255,255,255,0.95) 0%, rgba(248,250,252,0.97) 100%);
+                    border: 1px solid rgba(255,255,255,0.9);
+                    border-radius: 8px;
+                    padding: 6px 10px;
+                    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+                    font-size: 12px;
+                    font-weight: 600;
+                    color: #2c3e50;
+                    white-space: nowrap;
+                    box-shadow: 0 4px 12px rgba(0,0,0,0.15), 0 2px 4px rgba(0,0,0,0.1);
+                    backdrop-filter: blur(8px);
+                    text-shadow: 0 1px 2px rgba(255,255,255,0.8);
+                    text-align: center;
+                    cursor: default;
+                    user-select: none;
+                ">
+                    <span style="
+                        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                        -webkit-background-clip: text;
+                        -webkit-text-fill-color: transparent;
+                        background-clip: text;
+                        font-weight: 800;
+                        margin-right: 4px;
+                    ">${number}.</span><span>${displayName}</span>
+                </div>`;
+
+        const label = new T.Label({
+            text: labelText,
+            position: new T.LngLat(place.lng, place.lat),
+            offset: new T.Point(-30, -75), // 居中偏移
+            // 天地图默认的 .tdt-label 自带背景、内边距和阴影，会与
+            // labelText 中的自定义卡片叠成双层。使用专用类接管外层样式。
+            className: 'travel-map-label travel-map-label--place'
+        });
+
+        label.setBackgroundColor('transparent');
+        label.setBorderColor('transparent');
+
+        this.map.addOverLay(label);
+
+        if (!this.showPlaceNames && label.getElement()) {
+            label.getElement().style.display = 'none';
+        }
+
+        this.placeLabels.push({
+            id: place.id,
+            label: label,
+            visible: this.showPlaceNames
+        });
+
+        return label;
+    }
+
     // 删除标记
     removeMarker(id) {
         if (!this.isMapLoaded) return;
@@ -3831,6 +4380,9 @@ class TravelPlanner {
             } else if (selectedMapApi === 'gaode' && typeof AMap !== 'undefined') {
                 // 高德地图标记删除
                 this.map.remove(markerObj.marker);
+            } else if (selectedMapApi === 'tianditu' && typeof T !== 'undefined') {
+                // 天地图标记删除
+                this.map.removeOverLay(markerObj.marker);
             }
 
             this.markers.splice(markerIndex, 1);
@@ -3844,6 +4396,8 @@ class TravelPlanner {
                     this.placeLabels[labelIndex].label.setMap(null);
                 } else if (selectedMapApi === 'gaode' && typeof AMap !== 'undefined') {
                     this.map.remove(this.placeLabels[labelIndex].label);
+                } else if (selectedMapApi === 'tianditu' && typeof T !== 'undefined') {
+                    this.map.removeOverLay(this.placeLabels[labelIndex].label);
                 }
             }
             this.placeLabels.splice(labelIndex, 1);
@@ -3862,6 +4416,8 @@ class TravelPlanner {
                 m.marker.setMap(null);
             } else if (selectedMapApi === 'gaode' && typeof AMap !== 'undefined') {
                 this.map.remove(m.marker);
+            } else if (selectedMapApi === 'tianditu' && typeof T !== 'undefined') {
+                this.map.removeOverLay(m.marker);
             }
         });
         this.markers = [];
@@ -3873,6 +4429,8 @@ class TravelPlanner {
                     l.label.setMap(null);
                 } else if (selectedMapApi === 'gaode' && typeof AMap !== 'undefined') {
                     this.map.remove(l.label);
+                } else if (selectedMapApi === 'tianditu' && typeof T !== 'undefined') {
+                    this.map.removeOverLay(l.label);
                 }
             }
         });
@@ -3938,6 +4496,8 @@ class TravelPlanner {
                 m.marker.setMap(null);
             } else if (selectedMapApi === 'gaode' && typeof AMap !== 'undefined') {
                 this.map.remove(m.marker);
+            } else if (selectedMapApi === 'tianditu' && typeof T !== 'undefined') {
+                this.map.removeOverLay(m.marker);
             }
         });
         this.markers = [];
@@ -3949,6 +4509,8 @@ class TravelPlanner {
                     l.label.setMap(null);
                 } else if (selectedMapApi === 'gaode' && typeof AMap !== 'undefined') {
                     this.map.remove(l.label);
+                } else if (selectedMapApi === 'tianditu' && typeof T !== 'undefined') {
+                    this.map.removeOverLay(l.label);
                 }
             }
         });
@@ -3973,6 +4535,11 @@ class TravelPlanner {
         } else if (selectedMapApi === 'gaode') {
             if (this.polylines) {
                 this.polylines.forEach(polyline => this.map.remove(polyline));
+                this.polylines = [];
+            }
+        } else if (selectedMapApi === 'tianditu') {
+            if (this.polylines) {
+                this.polylines.forEach(polyline => this.map.removeOverLay(polyline));
                 this.polylines = [];
             }
         }
@@ -4080,6 +4647,13 @@ class TravelPlanner {
                 console.warn('⚠️ AMap对象未加载，无法绘制高德地图路线');
                 this.drawSimplePath(activePlaces);
             }
+        } else if (selectedMapApi === 'tianditu') {
+            if (typeof T !== 'undefined') {
+                this.drawTiandituRoute(activePlaces);
+            } else {
+                console.warn('⚠️ T对象未加载，无法绘制天地图路线');
+                this.drawSimplePath(activePlaces);
+            }
         } else {
             console.warn('⚠️ 当前地图API不支持路线绘制，使用简单连线');
             this.drawSimplePath(activePlaces);
@@ -4107,6 +4681,12 @@ class TravelPlanner {
             // 清除高德地图路线
             if (this.polylines) {
                 this.polylines.forEach(polyline => this.map.remove(polyline));
+                this.polylines = [];
+            }
+        } else if (selectedMapApi === 'tianditu' && typeof T !== 'undefined') {
+            // 清除天地图路线
+            if (this.polylines) {
+                this.polylines.forEach(polyline => this.map.removeOverLay(polyline));
                 this.polylines = [];
             }
         }
@@ -4441,7 +5021,7 @@ class TravelPlanner {
         }
     }
 
-    // 高德地图简单路径绘制  
+    // 高德地图简单路径绘制
     drawGaodeSimplePath(activePlaces) {
         const colors = [
             '#e74c3c', '#3498db', '#2ecc71', '#f39c12', '#9b59b6',
@@ -4488,8 +5068,220 @@ class TravelPlanner {
             this.drawGoogleSimplePath(activePlaces);
         } else if (selectedMapApi === 'gaode' && typeof AMap !== 'undefined') {
             this.drawGaodeSimplePath(activePlaces);
+        } else if (selectedMapApi === 'tianditu' && typeof T !== 'undefined') {
+            this.drawTiandituSimplePath(activePlaces);
         } else {
             console.warn('⚠️ 无法绘制路径：地图API未加载');
+        }
+    }
+
+    // 天地图路线绘制
+    drawTiandituRoute(activePlaces) {
+        // 清除现有路线
+        if (this.polylines) {
+            this.polylines.forEach(polyline => this.map.removeOverLay(polyline));
+            this.polylines = [];
+        }
+
+        const apiKey = this.getApiKey('tianditu');
+        if (!apiKey) {
+            console.warn('⚠️ 天地图API密钥未配置，使用简单连线');
+            this.drawTiandituSimplePath(activePlaces);
+            return;
+        }
+
+        console.log('🛣️ 使用天地图路径规划API绘制路线');
+        this.drawTiandituRoutesWithAPI(activePlaces, apiKey);
+    }
+
+    async drawTiandituRoutesWithAPI(activePlaces, apiKey) {
+        try {
+            this.polylines = this.polylines || [];
+
+            // 先立即绘制简单连线（快速显示）
+            this.drawTiandituSimplePath(activePlaces);
+
+            // 异步获取详细路径
+            this.drawDetailedTiandituRoutes(activePlaces, apiKey);
+
+        } catch (error) {
+            console.error('❌ 天地图路径规划出错:', error);
+            this.drawTiandituSimplePath(activePlaces);
+        }
+    }
+
+    async drawDetailedTiandituRoutes(activePlaces, apiKey) {
+        try {
+            const routePromises = [];
+
+            for (let i = 0; i < activePlaces.length - 1; i++) {
+                const origin = activePlaces[i];
+                const destination = activePlaces[i + 1];
+
+                routePromises.push(
+                    this.getTiandituRoute(origin, destination, apiKey)
+                );
+            }
+
+            const results = await Promise.allSettled(routePromises);
+
+            // 清除之前的路线
+            if (this.polylines) {
+                this.polylines.forEach(polyline => this.map.removeOverLay(polyline));
+                this.polylines = [];
+            }
+
+            const colors = [
+                '#e74c3c', '#3498db', '#2ecc71', '#f39c12', '#9b59b6',
+                '#1abc9c', '#e67e22', '#34495e', '#f1c40f', '#e91e63'
+            ];
+
+            results.forEach((result, i) => {
+                const color = colors[i % colors.length];
+
+                if (result.status === 'fulfilled' && result.value && result.value.success && result.value.coordinates) {
+                    const path = result.value.coordinates.map(pt => new T.LngLat(pt[0], pt[1]));
+
+                    const polyline = new T.Polyline(path, {
+                        color: color,
+                        weight: 8,
+                        opacity: 0.9,
+                        lineStyle: 'solid'
+                    });
+
+                    this.map.addOverLay(polyline);
+                    this.polylines.push(polyline);
+                } else {
+                    // 回退简单连线
+                    const origin = activePlaces[i];
+                    const destination = activePlaces[i + 1];
+                    const path = [
+                        new T.LngLat(origin.lng, origin.lat),
+                        new T.LngLat(destination.lng, destination.lat)
+                    ];
+
+                    const polyline = new T.Polyline(path, {
+                        color: color,
+                        weight: 8,
+                        opacity: 0.9,
+                        lineStyle: 'dashed'
+                    });
+
+                    this.map.addOverLay(polyline);
+                    this.polylines.push(polyline);
+                }
+            });
+
+        } catch (error) {
+            console.error('❌ 绘制天地图详细路线失败:', error);
+        }
+    }
+
+    async getTiandituRoute(origin, destination, apiKey) {
+        // 检查路线缓存
+        const cachedRoute = this.getCachedRoute(origin, destination);
+        if (cachedRoute) {
+            return {
+                success: true,
+                coordinates: cachedRoute.coordinates,
+                distance: cachedRoute.distance,
+                duration: cachedRoute.duration
+            };
+        }
+
+        return new Promise((resolve) => {
+            if (!this.map || typeof T === 'undefined') {
+                resolve({ success: false });
+                return;
+            }
+
+            let settled = false;
+            let drivingRoute = null;
+            let timeoutId = null;
+            const finish = (value) => {
+                if (settled) return;
+                settled = true;
+                if (timeoutId) clearTimeout(timeoutId);
+                if (drivingRoute && typeof drivingRoute.clearResults === 'function') {
+                    drivingRoute.clearResults();
+                }
+                resolve(value);
+            };
+
+            timeoutId = setTimeout(() => {
+                console.warn('⚠️ 天地图路径规划请求超时');
+                finish({ success: false });
+            }, 15000);
+
+            try {
+                const config = {
+                    style: 0,
+                    onSearchComplete: (result) => {
+                        if (result && typeof result.getPlan === 'function') {
+                            const plan = result.getPlan(0);
+                            if (plan) {
+                                const distance = Number(plan.getDistance());
+                                const duration = Number(plan.getDuration()) / 60;
+
+                                // getPath 返回的是 T.LngLat 数组
+                                const tLngLats = plan.getPath() || [];
+                                const coordinates = tLngLats.map(pt => [
+                                    typeof pt.getLng === 'function' ? pt.getLng() : pt.lng,
+                                    typeof pt.getLat === 'function' ? pt.getLat() : pt.lat
+                                ]).filter(pt => Number.isFinite(pt[0]) && Number.isFinite(pt[1]));
+
+                                if (coordinates.length >= 2 && Number.isFinite(distance) && Number.isFinite(duration)) {
+                                    // 缓存路线
+                                    this.cacheRoute(origin, destination, coordinates, distance, duration);
+
+                                    finish({
+                                        success: true,
+                                        coordinates: coordinates,
+                                        distance: distance,
+                                        duration: duration
+                                    });
+                                    return;
+                                }
+                            }
+                        }
+
+                        console.warn('⚠️ 天地图路径规划未返回有效路线');
+                        finish({ success: false });
+                    }
+                };
+
+                drivingRoute = new T.DrivingRoute(this.map, config);
+                drivingRoute.search(new T.LngLat(origin.lng, origin.lat), new T.LngLat(destination.lng, destination.lat));
+            } catch (error) {
+                console.error('❌ 天地图路径规划异常:', error);
+                finish({ success: false });
+            }
+        });
+    }
+
+    // 天地图简单路径绘制
+    drawTiandituSimplePath(activePlaces) {
+        const colors = [
+            '#e74c3c', '#3498db', '#2ecc71', '#f39c12', '#9b59b6',
+            '#1abc9c', '#e67e22', '#34495e', '#f1c40f', '#e91e63'
+        ];
+
+        for (let i = 0; i < activePlaces.length - 1; i++) {
+            const color = colors[i % colors.length];
+            const path = [
+                new T.LngLat(activePlaces[i].lng, activePlaces[i].lat),
+                new T.LngLat(activePlaces[i + 1].lng, activePlaces[i + 1].lat)
+            ];
+
+            const polyline = new T.Polyline(path, {
+                color: color,
+                weight: 8,
+                opacity: 0.9,
+                lineStyle: 'solid'
+            });
+
+            this.map.addOverLay(polyline);
+            this.polylines.push(polyline);
         }
     }
 
@@ -4559,6 +5351,12 @@ class TravelPlanner {
                 url = `https://www.bing.com/maps/directions?rtp=pos.${fromPlace.lat}_${fromPlace.lng}~pos.${toPlace.lat}_${toPlace.lng}`;
                 appName = 'Bing 地图';
                 break;
+            case 'tianditu':
+                // 天地图 (天地图不支持直接的导航链接传参格式，简单指向主页或搜索页)
+                // 但可以传起点和终点给其路线规划服务：
+                url = `https://map.tianditu.gov.cn/?orig=${fromPlace.lng},${fromPlace.lat}&dest=${toPlace.lng},${toPlace.lat}&type=route`;
+                appName = '天地图';
+                break;
             default:
                 // 默认使用高德地图
                 url = `https://uri.amap.com/navigation?from=${fromPlace.lng},${fromPlace.lat}&to=${toPlace.lng},${toPlace.lat}&mode=car&policy=1&src=mypage&coordinate=gaode&callnative=0`;
@@ -4619,6 +5417,26 @@ class TravelPlanner {
                     if (typeof label.hide === 'function') label.hide();
                 }
             }
+        } else if (selectedMapApi === 'tianditu' && typeof T !== 'undefined') {
+            // 天地图 marker 和 label 的显示隐藏通常通过透明度控制或 setOpacity/hide() 方法
+            if (marker) {
+                if (visible) {
+                    if (typeof marker.show === 'function') marker.show();
+                    else marker.setOpacity && marker.setOpacity(1);
+                } else {
+                    if (typeof marker.hide === 'function') marker.hide();
+                    else marker.setOpacity && marker.setOpacity(0);
+                }
+            }
+            if (label) {
+                if (visible && this.showPlaceNames) {
+                    if (typeof label.show === 'function') label.show();
+                    else label.setOpacity && label.setOpacity(1);
+                } else {
+                    if (typeof label.hide === 'function') label.hide();
+                    else label.setOpacity && label.setOpacity(0);
+                }
+            }
         } else {
             console.warn('⚠️ 未知的地图API类型，无法设置marker可见性');
         }
@@ -4639,6 +5457,8 @@ class TravelPlanner {
             this.calculateSegmentDistanceWithGoogle(fromPlace, toPlace, toId);
         } else if (selectedMapApi === 'gaode') {
             this.calculateSegmentDistanceWithGaode(fromPlace, toPlace, toId);
+        } else if (selectedMapApi === 'tianditu') {
+            this.calculateSegmentDistanceWithTianditu(fromPlace, toPlace, toId);
         } else {
             // 使用直线距离作为备用
             this.calculateSegmentDistanceWithStraightLine(fromPlace, toPlace, toId, '估算');
@@ -4705,6 +5525,32 @@ class TravelPlanner {
         }
     }
 
+    // 使用天地图路线服务计算单个路线段距离
+    async calculateSegmentDistanceWithTianditu(fromPlace, toPlace, toId) {
+        const apiKey = this.getApiKey('tianditu');
+        if (!apiKey) {
+            this.calculateSegmentDistanceWithStraightLine(fromPlace, toPlace, toId, '直线');
+            return;
+        }
+
+        try {
+            const result = await this.calculateTiandituDistance(fromPlace, toPlace, apiKey);
+            const distanceElement = document.getElementById(`distance-${toId}`);
+            const durationElement = document.getElementById(`duration-${toId}`);
+
+            if (!result.success) {
+                this.calculateSegmentDistanceWithStraightLine(fromPlace, toPlace, toId, '直线');
+                return;
+            }
+
+            if (distanceElement) distanceElement.textContent = `${result.distance.toFixed(1)} 公里`;
+            if (durationElement) durationElement.textContent = `${Math.round(result.duration)} 分钟`;
+        } catch (error) {
+            console.error('❌ 天地图路线段距离计算出错:', error);
+            this.calculateSegmentDistanceWithStraightLine(fromPlace, toPlace, toId, '直线');
+        }
+    }
+
     // 使用直线距离计算路线段距离
     calculateSegmentDistanceWithStraightLine(fromPlace, toPlace, toId, suffix = '直线') {
         const distance = this.calculateStraightDistance(fromPlace.lat, fromPlace.lng, toPlace.lat, toPlace.lng);
@@ -4738,6 +5584,8 @@ class TravelPlanner {
                             this.setCurrentLocationGoogle(lat, lng);
                         } else if (selectedMapApi === 'gaode' && typeof AMap !== 'undefined') {
                             this.setCurrentLocationGaode(lat, lng);
+                        } else if (selectedMapApi === 'tianditu' && typeof T !== 'undefined') {
+                            this.setCurrentLocationTianditu(lat, lng);
                         } else {
                             console.warn('地图API未加载，无法在地图上显示位置');
                         }
@@ -4817,20 +5665,20 @@ class TravelPlanner {
                 title: '我的位置',
                 content: `
                     <div style="
-                        width: 24px; 
-                        height: 24px; 
-                        background: #27ae60; 
-                        border: 2px solid white; 
-                        border-radius: 50%; 
-                        display: flex; 
-                        align-items: center; 
+                        width: 24px;
+                        height: 24px;
+                        background: #27ae60;
+                        border: 2px solid white;
+                        border-radius: 50%;
+                        display: flex;
+                        align-items: center;
                         justify-content: center;
                         box-shadow: 0 2px 6px rgba(0,0,0,0.3);
                     ">
                         <div style="
-                            width: 8px; 
-                            height: 8px; 
-                            background: white; 
+                            width: 8px;
+                            height: 8px;
+                            background: white;
                             border-radius: 50%;
                         "></div>
                     </div>
@@ -4921,6 +5769,25 @@ class TravelPlanner {
 
                 this.showToast('❌ 地图类型切换失败');
             }
+        } else if (selectedMapApi === 'tianditu' && typeof T !== 'undefined') {
+            try {
+                if (this.isSatelliteMode) {
+                    this.map.setMapType(TMAP_NORMAL_MAP);
+                    satelliteBtn.textContent = '🛰️ 卫星图';
+                    satelliteBtn.title = '切换到卫星图';
+                    this.isSatelliteMode = false;
+                    this.showToast('已切换到普通地图');
+                } else {
+                    this.map.setMapType(TMAP_HYBRID_MAP);
+                    satelliteBtn.textContent = '🗺️ 普通图';
+                    satelliteBtn.title = '切换到普通图';
+                    this.isSatelliteMode = true;
+                    this.showToast('已切换到卫星图');
+                }
+            } catch (error) {
+                console.error('❌ 天地图图层切换失败:', error);
+                this.showToast('❌ 地图类型切换失败');
+            }
         } else {
             this.showToast('⚠️ 当前地图API不支持卫星图切换');
         }
@@ -4943,6 +5810,9 @@ class TravelPlanner {
                             l.label.show();
                         } else if (selectedMapApi === 'gaode' && typeof AMap !== 'undefined') {
                             l.label.show();
+                        } else if (selectedMapApi === 'tianditu' && typeof T !== 'undefined') {
+                            if (typeof l.label.show === 'function') l.label.show();
+                            else l.label.setOpacity && l.label.setOpacity(1);
                         }
                     }
                 });
@@ -4952,13 +5822,16 @@ class TravelPlanner {
                             m.label.show();
                         } else if (selectedMapApi === 'gaode' && typeof AMap !== 'undefined') {
                             m.label.show();
+                        } else if (selectedMapApi === 'tianditu' && typeof T !== 'undefined') {
+                            if (typeof m.label.show === 'function') m.label.show();
+                            else m.label.setOpacity && m.label.setOpacity(1);
                         }
                     }
                 });
                 toggleBtn.textContent = '🏷️ 隐藏名称';
                 toggleBtn.title = '隐藏地点名称';
                 this.showToast('已显示地点名称');
-                
+
                 // 显示后自动调整位置以防重叠
                 setTimeout(() => this.adjustLabels(), 300);
             } else {
@@ -4969,6 +5842,9 @@ class TravelPlanner {
                             l.label.hide();
                         } else if (selectedMapApi === 'gaode' && typeof AMap !== 'undefined') {
                             l.label.hide();
+                        } else if (selectedMapApi === 'tianditu' && typeof T !== 'undefined') {
+                            if (typeof l.label.hide === 'function') l.label.hide();
+                            else l.label.setOpacity && l.label.setOpacity(0);
                         }
                     }
                 });
@@ -4978,6 +5854,9 @@ class TravelPlanner {
                             m.label.hide();
                         } else if (selectedMapApi === 'gaode' && typeof AMap !== 'undefined') {
                             m.label.hide();
+                        } else if (selectedMapApi === 'tianditu' && typeof T !== 'undefined') {
+                            if (typeof m.label.hide === 'function') m.label.hide();
+                            else m.label.setOpacity && m.label.setOpacity(0);
                         }
                     }
                 });
@@ -4991,7 +5870,7 @@ class TravelPlanner {
             toggleBtn.textContent = this.showPlaceNames ? '🏷️ 隐藏名称' : '🏷️ 显示名称';
             toggleBtn.title = this.showPlaceNames ? '隐藏地点名称' : '显示地点名称';
             this.showToast(this.showPlaceNames ? '已显示地点名称' : '已隐藏地点名称');
-            
+
             if (this.showPlaceNames) {
                 setTimeout(() => this.adjustLabels(), 300);
             }
@@ -5026,11 +5905,13 @@ class TravelPlanner {
                     isVisible = l.label.div && l.label.div.style.opacity !== '0';
                 } else if (selectedMapApi === 'gaode') {
                     isVisible = l.label.getVisible();
+                } else if (selectedMapApi === 'tianditu') {
+                    isVisible = l.label.getOpacity ? l.label.getOpacity() !== 0 : true;
                 }
                 if (isVisible) allLabels.push({ type: 'place', data: l });
             }
         });
-        
+
         if (this.showPendingPlaces) {
             this.pendingMarkers.forEach(m => {
                 if (m.label) {
@@ -5039,6 +5920,8 @@ class TravelPlanner {
                         isVisible = m.label.div && m.label.div.style.opacity !== '0';
                     } else if (selectedMapApi === 'gaode') {
                         isVisible = m.label.getVisible();
+                    } else if (selectedMapApi === 'tianditu') {
+                        isVisible = m.label.getOpacity ? m.label.getOpacity() !== 0 : true;
                     }
                     if (isVisible) allLabels.push({ type: 'pending', data: m });
                 }
@@ -5055,8 +5938,11 @@ class TravelPlanner {
             } else if (selectedMapApi === 'gaode') {
                 labelElement = item.data.label.getElement();
                 if (labelElement) labelElement = labelElement.querySelector('div');
+            } else if (selectedMapApi === 'tianditu') {
+                labelElement = item.data.label.getElement ? item.data.label.getElement() : null;
+                if (labelElement) labelElement = labelElement.querySelector('div') || labelElement;
             }
-            
+
             if (!labelElement) return null;
 
             // 获取或缓存尺寸
@@ -5080,11 +5966,16 @@ class TravelPlanner {
                     centerY = pos.y - 85;
                     pinTop = pos.y - 55;
                 }
-            } else {
+            } else if (selectedMapApi === 'gaode') {
                 const pos = this.map.lngLatToContainer(item.data.label.getPosition());
                 centerX = pos.getX();
                 centerY = pos.getY() - 85;
                 pinTop = pos.getY() - 55;
+            } else if (selectedMapApi === 'tianditu') {
+                const pos = this.map.lngLatToContainerPoint(item.data.label.getLngLat());
+                centerX = pos.x;
+                centerY = pos.y - 85;
+                pinTop = pos.y - 55;
             }
 
             return {
@@ -5118,6 +6009,8 @@ class TravelPlanner {
         // 优先锁定图标区域为禁区
         labelData.forEach(label => {
             occupiedRects.push({
+                type: 'pin',
+                owner: label,
                 left: label.centerX - 18,
                 right: label.centerX + 18,
                 top: label.pinTop - 5,
@@ -5135,14 +6028,17 @@ class TravelPlanner {
                 };
 
                 const conflict = occupiedRects.some(r => {
-                    return !(rect.right < r.left || rect.left > r.right || 
+                    // 名称的默认位置已经与自己的大头针留有安全间距；
+                    // 这里只避让其他大头针，避免每个名称都被固定多抬高一档。
+                    if (r.type === 'pin' && r.owner === label) return false;
+                    return !(rect.right < r.left || rect.left > r.right ||
                              rect.bottom < r.top || rect.top > r.bottom);
                 });
 
                 if (!conflict) {
                     label.offsetX = candidate.x;
                     label.offsetY = candidate.y;
-                    occupiedRects.push(rect);
+                    occupiedRects.push({ ...rect, type: 'label', owner: label });
                     break;
                 }
             }
@@ -5152,9 +6048,11 @@ class TravelPlanner {
         labelData.forEach(data => {
             if (selectedMapApi === 'google') {
                 data.item.data.label.setOffset(data.offsetX, data.offsetY);
-            } else {
+            } else if (selectedMapApi === 'gaode') {
                 data.item.data.label.setOffset(new AMap.Pixel(data.offsetX, -75 - data.offsetY));
                 this.updateGaodeLabelLine(data.item.data.label, data.offsetX, data.offsetY);
+            } else if (selectedMapApi === 'tianditu') {
+                data.item.data.label.setOffset(new T.Point(data.offsetX - 30, -75 - data.offsetY));
             }
         });
     }
@@ -5165,7 +6063,7 @@ class TravelPlanner {
         if (!labelElement) return;
 
         let lineContainer = labelElement.querySelector('.label-leader-line');
-        
+
         if (offsetX === 0 && offsetY === 0) {
             if (lineContainer) lineContainer.style.opacity = '0';
             return;
@@ -5184,7 +6082,7 @@ class TravelPlanner {
         }
 
         lineContainer.style.opacity = '1';
-        
+
         // 计算连线起点和终点
         const startX = -offsetX;
         const startY = 45 + offsetY;
@@ -5204,7 +6102,7 @@ class TravelPlanner {
         // 使用 SVG 画虚线
         lineContainer.innerHTML = `
             <svg width="${Math.max(width, 2)}" height="${Math.max(height, 2)}" style="overflow:visible">
-                <line x1="${startX - left}" y1="${startY - top}" x2="${endX - left}" y2="${endY - top}" 
+                <line x1="${startX - left}" y1="${startY - top}" x2="${endX - left}" y2="${endY - top}"
                     style="stroke: rgba(102, 126, 234, 0.6); stroke-width: 2; stroke-dasharray: 4,3;" />
             </svg>
         `;
@@ -5289,6 +6187,8 @@ class TravelPlanner {
                     markerData.marker.setMap(null);
                 } else if (selectedMapApi === 'gaode' && typeof AMap !== 'undefined') {
                     this.map.remove(markerData.marker);
+                } else if (selectedMapApi === 'tianditu' && typeof T !== 'undefined') {
+                    this.map.removeOverLay(markerData.marker);
                 }
             }
             if (markerData.label) {
@@ -5296,6 +6196,8 @@ class TravelPlanner {
                     markerData.label.setMap(null);
                 } else if (selectedMapApi === 'gaode' && typeof AMap !== 'undefined') {
                     this.map.remove(markerData.label);
+                } else if (selectedMapApi === 'tianditu' && typeof T !== 'undefined') {
+                    this.map.removeOverLay(markerData.label);
                 }
             }
         });
@@ -5336,6 +6238,14 @@ class TravelPlanner {
             // 创建高德地图标签
             if (this.showPlaceNames) {
                 placeLabel = this.createGaodePendingLabel(place, displayName);
+            }
+        } else if (selectedMapApi === 'tianditu' && typeof T !== 'undefined') {
+            // 天地图待定点标记
+            marker = this.createTiandituPendingMarker(place, displayName);
+
+            // 创建天地图标签
+            if (this.showPlaceNames) {
+                placeLabel = this.createTiandituPendingLabel(place, displayName);
             }
         } else {
             console.warn('⚠️ 无法创建待定点标记：地图API未加载');
@@ -5483,6 +6393,136 @@ class TravelPlanner {
         return labelMarker;
     }
 
+    // 创建天地图待定点标记
+    createTiandituPendingMarker(place, displayName) {
+        const pendingMarkerSvg = `
+            <svg width="40" height="50" viewBox="0 0 40 50" xmlns="http://www.w3.org/2000/svg">
+                <!-- 阴影 -->
+                <ellipse cx="20" cy="47" rx="8" ry="3" fill="rgba(0,0,0,0.3)"/>
+                <!-- 主要标记 -->
+                <path d="M20 3C13.4 3 8 8.4 8 15C8 24.75 20 47 20 47C20 47 32 24.75 32 15C32 8.4 26.6 3 20 3Z" fill="#f39c12" stroke="#ffffff" stroke-width="2"/>
+                <!-- 内圆 -->
+                <circle cx="20" cy="15" r="6" fill="#ffffff"/>
+                <!-- 待定图标 -->
+                <text x="20" y="19" text-anchor="middle" font-family="Arial, sans-serif" font-size="10" font-weight="bold" fill="#f39c12">⏳</text>
+            </svg>
+        `;
+
+        const iconHtml = `
+            <div style="position: relative; width: 40px; height: 50px; cursor: pointer;">
+                ${pendingMarkerSvg}
+            </div>
+        `;
+
+        const icon = new T.Icon({
+            iconUrl: 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(pendingMarkerSvg),
+            iconSize: new T.Point(40, 50),
+            iconAnchor: new T.Point(20, 50)
+        });
+
+        const marker = new T.Marker(new T.LngLat(place.lng, place.lat), { icon: icon });
+
+        // 添加点击事件
+        marker.addEventListener('click', () => {
+            this.showPlaceModal({
+                name: place.name,
+                address: place.address,
+                lng: place.lng,
+                lat: place.lat,
+                customName: place.customName,
+                notes: place.notes,
+                isPending: true
+            });
+        });
+
+        this.map.addOverLay(marker);
+        return marker;
+    }
+
+    // 创建天地图待定点标签
+    createTiandituPendingLabel(place, displayName) {
+        const labelHtml = `
+            <div style="
+                position: absolute;
+                background: linear-gradient(135deg, rgba(255,193,7,0.95) 0%, rgba(255,235,59,0.97) 100%);
+                border: 1px solid rgba(255,193,7,0.9);
+                border-radius: 8px;
+                padding: 6px 10px;
+                font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+                font-size: 12px;
+                font-weight: 600;
+                color: #8b5a00;
+                white-space: nowrap;
+                box-shadow: 0 4px 12px rgba(0,0,0,0.15), 0 2px 4px rgba(0,0,0,0.1);
+                backdrop-filter: blur(8px);
+                text-shadow: 0 1px 2px rgba(255,255,255,0.8);
+                min-width: 60px;
+                text-align: center;
+                cursor: default;
+                user-select: none;
+                z-index: 600;
+                left: 50%;
+                transform: translateX(-50%);
+                pointer-events: none;
+            ">
+                ⏳ ${displayName}
+            </div>
+        `;
+
+        const label = new T.Label({
+            text: labelHtml,
+            position: new T.LngLat(place.lng, place.lat),
+            offset: new T.Point(0, -60),
+            className: 'travel-map-label travel-map-label--pending'
+        });
+
+        // 移除默认边框
+        label.setBackgroundColor('transparent');
+        label.setBorderColor('transparent');
+
+        this.map.addOverLay(label);
+        return label;
+    }
+
+    // 天地图设置当前位置
+    setCurrentLocationTianditu(lat, lng) {
+        const locationSvg = `
+            <svg width="40" height="40" viewBox="0 0 40 40" xmlns="http://www.w3.org/2000/svg">
+                <!-- 阴影 -->
+                <ellipse cx="20" cy="35" rx="12" ry="4" fill="rgba(0,0,0,0.2)"/>
+                <!-- 外发光 -->
+                <circle cx="20" cy="20" r="14" fill="rgba(52, 152, 219, 0.2)">
+                    <animate attributeName="r" values="12;20;12" dur="2s" repeatCount="indefinite" />
+                    <animate attributeName="opacity" values="0.8;0;0.8" dur="2s" repeatCount="indefinite" />
+                </circle>
+                <!-- 白色边框 -->
+                <circle cx="20" cy="20" r="10" fill="#ffffff" filter="drop-shadow(0 2px 4px rgba(0,0,0,0.2))"/>
+                <!-- 核心蓝点 -->
+                <circle cx="20" cy="20" r="7" fill="#3498db"/>
+            </svg>
+        `;
+
+        const icon = new T.Icon({
+            iconUrl: 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(locationSvg),
+            iconSize: new T.Point(40, 40),
+            iconAnchor: new T.Point(20, 20)
+        });
+
+        const lnglat = new T.LngLat(lng, lat);
+        if (this.currentLocationMarker) {
+            this.map.removeOverLay(this.currentLocationMarker);
+        }
+        this.currentLocationMarker = new T.Marker(lnglat, { icon: icon, zIndexOffset: 1000 });
+        this.map.addOverLay(this.currentLocationMarker);
+
+        // 如果这是唯一一个位置点，或没有其他地点，自适应地图
+        if (this.travelList.length === 0) {
+            this.map.centerAndZoom(lnglat, 14);
+        } else {
+            this.map.panTo(lnglat);
+        }
+    }
+
     // 创建城市过滤按钮
     createCityFilterButton() {
         const mapControls = document.querySelector('.map-controls');
@@ -5564,7 +6604,7 @@ class TravelPlanner {
         // 尝试匹配常见的城市格式（支持中英文）
         const cityPatterns = [
             /([^,，\s]*市)/,           // 匹配"XX市"
-            /([^,，\s]*县)/,           // 匹配"XX县"  
+            /([^,，\s]*县)/,           // 匹配"XX县"
             /([^,，\s]*区)/,           // 匹配"XX区"
             /([^,，\s]*自治区)/,       // 匹配"XX自治区"
             /([^,，\s]*省)/,           // 匹配"XX省"
@@ -5828,6 +6868,8 @@ class TravelPlanner {
                 m.marker.setMap(null);
             } else if (selectedMapApi === 'gaode' && typeof AMap !== 'undefined') {
                 this.map.remove(m.marker);
+            } else if (selectedMapApi === 'tianditu' && typeof T !== 'undefined') {
+                this.map.removeOverLay(m.marker);
             }
         });
         this.markers = [];
@@ -5839,6 +6881,8 @@ class TravelPlanner {
                     l.label.setMap(null);
                 } else if (selectedMapApi === 'gaode' && typeof AMap !== 'undefined') {
                     this.map.remove(l.label);
+                } else if (selectedMapApi === 'tianditu' && typeof T !== 'undefined') {
+                    this.map.removeOverLay(l.label);
                 }
             }
         });
@@ -5873,6 +6917,8 @@ class TravelPlanner {
             this.fitMapToPlacesGoogle(places);
         } else if (selectedMapApi === 'gaode' && typeof AMap !== 'undefined') {
             this.fitMapToPlacesGaode(places);
+        } else if (selectedMapApi === 'tianditu' && typeof T !== 'undefined' && T.Map) {
+            this.fitMapToPlacesTianditu(places);
         } else {
             console.warn('⚠️ 无法调整地图视野：未知的地图API');
         }
@@ -5939,6 +6985,53 @@ class TravelPlanner {
 
             console.log(`📐 高德地图边界已调整: ${places.length}个地点`);
         }
+    }
+
+    // 天地图调整视野
+    fitMapToPlacesTianditu(places) {
+        if (places.length === 1) {
+            this.map.centerAndZoom(new T.LngLat(places[0].lng, places[0].lat), 14);
+            console.log(`📍 天地图居中到单个地点: ${places[0].name}`);
+            return;
+        }
+
+        const points = places.map(place => new T.LngLat(place.lng, place.lat));
+        if (typeof this.map.setViewport === 'function') {
+            this.map.setViewport(points);
+            console.log(`📐 天地图视野已调整: ${places.length}个地点`);
+            return;
+        }
+
+        let minLat = places[0].lat;
+        let maxLat = places[0].lat;
+        let minLng = places[0].lng;
+        let maxLng = places[0].lng;
+
+        places.forEach(place => {
+            minLat = Math.min(minLat, place.lat);
+            maxLat = Math.max(maxLat, place.lat);
+            minLng = Math.min(minLng, place.lng);
+            maxLng = Math.max(maxLng, place.lng);
+        });
+
+        const center = new T.LngLat((minLng + maxLng) / 2, (minLat + maxLat) / 2);
+        const span = Math.max(maxLat - minLat, maxLng - minLng);
+        let zoom = 12;
+
+        if (span > 30) {
+            zoom = 4;
+        } else if (span > 15) {
+            zoom = 5;
+        } else if (span > 8) {
+            zoom = 6;
+        } else if (span > 3) {
+            zoom = 8;
+        } else if (span > 1) {
+            zoom = 10;
+        }
+
+        this.map.centerAndZoom(center, zoom);
+        console.log(`📐 天地图视野已通过中心点回退调整: ${places.length}个地点`);
     }
 
     // 清空所有地点
@@ -6767,7 +7860,7 @@ class TravelPlanner {
                     '📝 同名方案'}
                         </div>
                     </div>
-                    
+
                     <div class="conflict-details">
                         <div class="scheme-comparison">
                             <div class="scheme-info existing">
@@ -6777,7 +7870,7 @@ class TravelPlanner {
                                 <p><strong>创建时间:</strong> ${new Date(existingScheme.createdAt).toLocaleString('zh-CN')}</p>
                                 ${existingScheme.modifiedAt ? `<p><strong>修改时间:</strong> ${new Date(existingScheme.modifiedAt).toLocaleString('zh-CN')}</p>` : ''}
                             </div>
-                            
+
                             <div class="scheme-info importing">
                                 <h5>要导入的方案</h5>
                                 <p><strong>名称:</strong> ${importScheme.name}</p>
@@ -6787,7 +7880,7 @@ class TravelPlanner {
                             </div>
                         </div>
                     </div>
-                    
+
                     <div class="conflict-resolution">
                         <h5>选择处理方式:</h5>
                         <div class="resolution-options">
@@ -6830,7 +7923,7 @@ class TravelPlanner {
                                 </label>
                             `}
                         </div>
-                        
+
                         <div class="rename-input" id="renameInput_${index}" ${conflict.conflictType === 'version' ? 'style="display: none;"' : ''}>
                             <div class="rename-header">
                                 <div class="rename-label">冲突方案重命名为：</div>
@@ -6838,8 +7931,8 @@ class TravelPlanner {
                                     ⚠️ 名称已存在
                                 </div>
                             </div>
-                            <input type="text" placeholder="输入新名称..." 
-                                   value="${importScheme.name} (导入)" 
+                            <input type="text" placeholder="输入新名称..."
+                                   value="${importScheme.name} (导入)"
                                    id="newName_${index}" />
                         </div>
                     </div>
@@ -7935,55 +9028,55 @@ class TravelPlanner {
     <title>我的旅游计划 - ${currentDate}</title>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
-        body { 
+        body {
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
             line-height: 1.6; color: #333; background: #f8f9fa; min-height: 100vh;
         }
         .container { width: 100%; margin: 0 auto; padding: 20px; }
-        .header { 
+        .header {
             background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
             color: white; padding: 30px; border-radius: 15px; text-align: center; margin-bottom: 30px;
         }
         .header h1 { font-size: 2.5rem; margin-bottom: 10px; }
         .header p { font-size: 1.1rem; opacity: 0.9; }
-        .stats { 
+        .stats {
             display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
             gap: 20px; margin-bottom: 30px;
         }
-        .stat-card { 
+        .stat-card {
             background: white; padding: 20px; border-radius: 10px; text-align: center;
             box-shadow: 0 4px 15px rgba(0,0,0,0.1);
         }
         .stat-number { font-size: 2rem; font-weight: bold; color: #667eea; }
         .stat-label { color: #666; margin-top: 5px; }
-        
+
         /* 单栏布局 - 地图在上方占据整个宽度 */
-        .map-section { 
-            background: white; border-radius: 15px; padding: 30px; 
+        .map-section {
+            background: white; border-radius: 15px; padding: 30px;
             box-shadow: 0 4px 20px rgba(0,0,0,0.1); margin-bottom: 30px;
         }
-        .places-list { 
-            background: white; border-radius: 15px; padding: 30px; 
+        .places-list {
+            background: white; border-radius: 15px; padding: 30px;
             box-shadow: 0 4px 20px rgba(0,0,0,0.1); margin-bottom: 30px;
         }
-        
+
         .map-section h2, .places-list h2 { color: #2c3e50; margin-bottom: 15px; }
-        .map-description { 
-            color: #7f8c8d; font-size: 0.95rem; margin-bottom: 20px; 
+        .map-description {
+            color: #7f8c8d; font-size: 0.95rem; margin-bottom: 20px;
             font-style: italic; text-align: center;
         }
-        .map-note { 
-            color: #95a5a6; font-size: 0.85rem; margin-top: 15px; 
+        .map-note {
+            color: #95a5a6; font-size: 0.85rem; margin-top: 15px;
             text-align: center; line-height: 1.4;
         }
-        
+
         .map-container {
-            border-radius: 15px; overflow: hidden; 
+            border-radius: 15px; overflow: hidden;
             box-shadow: 0 4px 15px rgba(0,0,0,0.1);
             background: #f8f9fa;
         }
-        .map-image { 
-            width: 100%; height: auto; display: block; 
+        .map-image {
+            width: 100%; height: auto; display: block;
             min-height: 500px; max-height: 800px; object-fit: contain;
             border: 2px solid #e1e5e9; border-radius: 10px;
         }
@@ -7994,23 +9087,23 @@ class TravelPlanner {
             display: flex; flex-direction: column; justify-content: center; align-items: center;
         }
         .placeholder-icon { font-size: 4rem; margin-bottom: 20px; }
-        
-        .place-item { 
+
+        .place-item {
             display: flex; align-items: center; padding: 20px 0; border-bottom: 1px solid #eee;
         }
         .place-item:last-child { border-bottom: none; }
-        .place-number { 
+        .place-number {
             background: #667eea; color: white; width: 35px; height: 35px;
             border-radius: 50%; display: flex; align-items: center; justify-content: center;
             font-weight: bold; margin-right: 20px; flex-shrink: 0; font-size: 1.1rem;
         }
         .place-info h3 { color: #2c3e50; margin-bottom: 8px; font-size: 1.2rem; }
         .place-address { color: #7f8c8d; font-size: 1rem; line-height: 1.4; }
-        .footer { 
+        .footer {
             text-align: center; margin-top: 40px; padding: 30px;
             color: #666; font-size: 1rem;
         }
-        
+
         /* 响应式设计 */
         @media (max-width: 768px) {
             .container { padding: 15px; }
@@ -8019,7 +9112,7 @@ class TravelPlanner {
             .map-section, .places-list { padding: 20px; }
             .place-info h3 { font-size: 1.1rem; }
         }
-        
+
         @media print {
             body { background: white; }
             .container { padding: 0; }
@@ -8033,7 +9126,7 @@ class TravelPlanner {
             <h1>🗺️ 我的旅游计划</h1>
             <p>生成时间：${currentDate}</p>
         </div>
-        
+
         <div class="stats">
             <div class="stat-card">
                 <div class="stat-number">${this.travelList.length}</div>
@@ -8052,10 +9145,10 @@ class TravelPlanner {
                 <div class="stat-label">预计时间 (小时)</div>
             </div>
         </div>
-        
+
         <!-- 地图区域 - 占据整个宽度 -->
         ${mapSection}
-        
+
         <!-- 行程列表 - 独立区域 -->
         <div class="places-list">
             <h2>📝 详细行程</h2>
@@ -8069,7 +9162,7 @@ class TravelPlanner {
                 </div>
             `).join('')}
         </div>
-        
+
         <div class="footer">
             <p>✨ 使用旅游规划助手生成 | 祝您旅途愉快！</p>
             <p>📅 ${currentDate} | 🌟 包含多彩路线标识，每段路线使用不同颜色便于区分</p>
@@ -8312,35 +9405,40 @@ class TravelPlanner {
 // Google Maps API回调函数
 function initMap() {
     console.log('🌍 Google Maps API回调函数被调用');
-    // 初始化应用
-    window.app = new TravelPlanner();
-    console.log('📱 TravelPlanner应用实例已创建 (Google Maps)');
+    if (window.app && window.app.settings) {
+        window.app.init();
+        console.log('📱 已有TravelPlanner实例，继续初始化Google Maps');
+    } else {
+        window.app = new TravelPlanner();
+        console.log('📱 TravelPlanner应用实例已创建 (Google Maps)');
+    }
 }
 
 // 高德地图不需要回调函数，已在loadGaodeMapScript中直接处理
 
-// 应用初始化（备用方案）
-document.addEventListener('DOMContentLoaded', () => {
-    if (!window.app) {
-        // 如果地图API还没加载完成，创建一个等待实例
-        window.app = {
-            showApiHelp: () => {
-                alert('正在等待地图API加载，请稍候...');
-            },
-            showSettingsModal: () => {
-                alert('应用正在初始化中，请稍候...');
-            },
-            locatePlace: () => { },
-            removePlaceFromList: () => { }
-        };
+// 注册版本化应用壳缓存；只缓存本站静态文件，不缓存地图API、API Key或地图瓦片。
+function registerAppShellServiceWorker() {
+    if (!('serviceWorker' in navigator) || !window.isSecureContext) return;
 
-        setTimeout(() => {
-            // 如果3秒后还没有完整的应用实例，直接创建一个
-            if (!window.app || !window.app.settings) {
-                console.log('⚠️ 地图API加载超时，创建演示模式应用');
-                window.app = new TravelPlanner();
-            }
-        }, 3000);
+    const register = () => {
+        navigator.serviceWorker.register('./service-worker.js').catch(error => {
+            console.warn('应用缓存注册失败，将继续使用普通网络加载:', error);
+        });
+    };
+
+    if (document.readyState === 'complete') {
+        register();
+    } else {
+        window.addEventListener('load', register, { once: true });
+    }
+}
+
+// 应用初始化：DOM就绪后立即创建实例并开始加载所选地图SDK。
+document.addEventListener('DOMContentLoaded', () => {
+    registerAppShellServiceWorker();
+
+    if (!window.app || !window.app.settings) {
+        window.app = new TravelPlanner();
     }
 });
 

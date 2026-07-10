@@ -2,7 +2,7 @@
 
 一个功能强大的在线旅游规划工具，支持智能路线规划、多平台导航集成和完整的行程管理功能。
 
-![17旅游规划助手](https://img.shields.io/badge/版本-v1.12.1-blue) ![多地图API](https://img.shields.io/badge/多地图API-支持-green) ![响应式](https://img.shields.io/badge/响应式-✓-success)
+![17旅游规划助手](https://img.shields.io/badge/版本-v1.14.0-blue) ![多地图API](https://img.shields.io/badge/多地图API-支持-green) ![响应式](https://img.shields.io/badge/响应式-✓-success)
 
 ## ✨ 核心特性
 
@@ -54,7 +54,7 @@
 ## 🎯 主要功能
 
 - ✅ **智能地点搜索**：支持地点名称、类型搜索
-- ✅ **多种地图API**：高德地图、Google Maps、Bing Maps
+- ✅ **多种地图API**：高德地图、Google Maps、Bing Maps、天地图
 - ✅ **路线规划优化**：自动计算最优路线
 - ✅ **双平台导航**：高德地图 + Google 地图导航
 - ✅ **方案管理**：保存、导入、导出旅游方案

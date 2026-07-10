@@ -5,7 +5,36 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>17旅游规划助手</title>
-    <link rel="stylesheet" href="styles.css">
+    <link rel="stylesheet" href="styles.css?v=1.15.0">
+    <script>
+        // 尽早与当前地图服务建立 DNS/TLS 连接，不等待主脚本解析完成。
+        (() => {
+            try {
+                const saved = JSON.parse(localStorage.getItem('travelPlannerData') || '{}');
+                const provider = saved.settings?.selectedMapApi || 'gaode';
+                const providerOrigins = {
+                    gaode: ['https://webapi.amap.com'],
+                    tianditu: ['https://api.tianditu.gov.cn'],
+                    google: ['https://maps.googleapis.com', 'https://maps.gstatic.com']
+                };
+
+                (providerOrigins[provider] || []).forEach(origin => {
+                    const preconnect = document.createElement('link');
+                    preconnect.rel = 'preconnect';
+                    preconnect.href = origin;
+                    preconnect.crossOrigin = 'anonymous';
+                    document.head.appendChild(preconnect);
+
+                    const dnsPrefetch = document.createElement('link');
+                    dnsPrefetch.rel = 'dns-prefetch';
+                    dnsPrefetch.href = origin;
+                    document.head.appendChild(dnsPrefetch);
+                });
+            } catch (error) {
+                // 本地设置损坏不应影响页面继续启动。
+            }
+        })();
+    </script>
     <!-- Google地图API -->
     <!-- Google Maps API脚本将根据设置中的API密钥动态加载 -->
     <!-- 请在应用设置中配置您的Google Maps API密钥 -->
@@ -274,6 +303,16 @@
                                             </div>
                                         </div>
                                     </label>
+                                    <label class="api-choice-option">
+                                        <input type="radio" name="selectedMapApi" value="tianditu">
+                                        <div class="choice-card">
+                                            <div class="choice-icon">🇨🇳</div>
+                                            <div class="choice-info">
+                                                <h6>天地图</h6>
+                                                <p>国家地理信息公共服务平台</p>
+                                            </div>
+                                        </div>
+                                    </label>
                                 </div>
                             </div>
 
@@ -308,6 +347,16 @@
                                         <br>
                                         获取方式：访问 <a href="https://www.bingmapsportal.com/" target="_blank">Bing Maps Dev
                                             Center</a> 申请密钥
+                                    </small>
+                                </div>
+                                <div class="api-key-group">
+                                    <label for="tiandituApiKeyInput">天地图API密钥</label>
+                                    <input type="password" id="tiandituApiKeyInput" placeholder="输入天地图API Key (tk)..."
+                                        maxlength="200">
+                                    <small class="api-hint">
+                                        国家地理信息公共服务平台
+                                        <br>
+                                        获取方式：访问 <a href="https://console.tianditu.gov.cn/api/key" target="_blank">天地图开发者控制台</a> 申请密钥
                                     </small>
                                 </div>
                                 <div class="api-security-note">
@@ -357,6 +406,16 @@
                                         <div class="option-info">
                                             <h5>Bing 地图</h5>
                                             <p>微软地图服务，界面简洁</p>
+                                        </div>
+                                    </div>
+                                </label>
+                                <label class="setting-option">
+                                    <input type="radio" name="navigationApp" value="tianditu">
+                                    <div class="option-card">
+                                        <div class="option-icon">🇨🇳</div>
+                                        <div class="option-info">
+                                            <h5>天地图</h5>
+                                            <p>官方标准地图，精确详实</p>
                                         </div>
                                     </div>
                                 </label>
@@ -492,7 +551,7 @@
         </div>
     </div>
 
-    <script src="script.js"></script>
+    <script src="script.js?v=1.15.0"></script>
 
     <!-- 卜算子统计脚本 -->
     <script async src="//busuanzi.ibruce.info/busuanzi/2.3/busuanzi.pure.mini.js"></script>

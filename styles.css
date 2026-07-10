@@ -3822,3 +3822,22 @@ body.mobile-compact-mode .compact-toggle-floating {
 body.mobile-compact-mode .compact-toggle-floating:hover {
     background: linear-gradient(135deg, #2e8b57, #27ae60) !important;
 }
+/* 天地图 T.Label 外层只负责定位，卡片视觉由内部内容提供。 */
+.travel-map-label {
+    position: absolute;
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    box-shadow: none;
+    line-height: normal;
+    white-space: nowrap;
+    pointer-events: none;
+}
+
+.travel-map-label::before,
+.travel-map-label::after {
+    display: none;
+    content: none;
+}
