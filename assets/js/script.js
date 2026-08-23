@@ -1,7 +1,225 @@
 // 旅游规划助手 - Google Maps版本
 
+const Security = window.TravelPlannerSecurity;
+if (!Security) {
+    throw new Error('安全模块未加载，已中止应用初始化');
+}
+const ClientSecurity = window.TravelPlannerClientSecurity;
+if (!ClientSecurity) {
+    throw new Error('客户端安全边界未加载，已中止应用初始化');
+}
+const PlannerData = window.TravelPlannerData;
+if (!PlannerData) {
+    throw new Error('数据完整性模块未加载，已中止应用初始化');
+}
+const Search = window.TravelPlannerSearch;
+if (!Search) {
+    throw new Error('搜索状态模块未加载，已中止应用初始化');
+}
+const RouteOptimizer = window.TravelPlannerRouteOptimizer;
+if (!RouteOptimizer) {
+    throw new Error('路线优化模块未加载，已中止应用初始化');
+}
+const PerformanceCore = window.TravelPlannerPerformance;
+const PublicConfig = window.TRAVEL_PLANNER_PUBLIC_CONFIG || { sdkPublicKeys: {}, allowAdvancedByok: false };
+
+const DEMO_SEARCH_PLACES = Object.freeze([
+    Object.freeze({ id: 'demo-forbidden-city', name: '故宫博物院', address: '北京市东城区景山前街4号', lat: 39.916345, lng: 116.397155 }),
+    Object.freeze({ id: 'demo-bund', name: '外滩', address: '上海市黄浦区中山东一路', lat: 31.240018, lng: 121.490048 }),
+    Object.freeze({ id: 'demo-west-lake', name: '杭州西湖风景名胜区', address: '浙江省杭州市西湖区龙井路1号', lat: 30.243108, lng: 120.150722 }),
+    Object.freeze({ id: 'demo-canton-tower', name: '广州塔', address: '广东省广州市海珠区阅江西路222号', lat: 23.105818, lng: 113.324553 }),
+    Object.freeze({ id: 'demo-kuanzhai', name: '宽窄巷子', address: '四川省成都市青羊区长顺上街127号', lat: 30.669452, lng: 104.055514 })
+]);
+
 // 全局变量存储PlaceLabel类，在Google Maps API加载后定义
 let PlaceLabel = null;
+
+function renderGooglePlaceLabel(element, value) {
+    const text = String(value ?? '');
+    const separatorIndex = text.indexOf('. ');
+    element.replaceChildren();
+
+    if (separatorIndex > 0 && /^\d+$/.test(text.slice(0, separatorIndex))) {
+        const number = document.createElement('span');
+        number.className = 'google-map-label-number';
+        number.textContent = `${text.slice(0, separatorIndex)}.`;
+        const name = document.createElement('span');
+        name.textContent = text.slice(separatorIndex + 2);
+        element.append(number, name);
+    } else {
+        element.textContent = text;
+    }
+}
+
+class DialogManager {
+    constructor(ownerDocument = document) {
+        this.document = ownerDocument;
+        this.stack = [];
+        this.originalInert = new Map();
+        this.focusableSelector = [
+            'a[href]',
+            'button:not([disabled])',
+            'input:not([disabled])',
+            'select:not([disabled])',
+            'textarea:not([disabled])',
+            'summary',
+            '[tabindex]:not([tabindex="-1"])'
+        ].join(',');
+        this.document.addEventListener('keydown', event => this.handleKeydown(event), true);
+        this.document.addEventListener('click', event => {
+            const active = this.activeState();
+            if (active && event.target === active.dialog) this.requestClose(active);
+        });
+    }
+
+    resolve(dialogOrId) {
+        return typeof dialogOrId === 'string'
+            ? this.document.getElementById(dialogOrId)
+            : dialogOrId;
+    }
+
+    activeState() {
+        return this.stack[this.stack.length - 1] || null;
+    }
+
+    open(dialogOrId, options = {}) {
+        const dialog = this.resolve(dialogOrId);
+        if (!dialog) throw new Error(`Dialog not found: ${String(dialogOrId)}`);
+        const existing = this.stack.find(state => state.dialog === dialog);
+        if (existing) return existing;
+
+        const trigger = options.trigger instanceof HTMLElement
+            ? options.trigger
+            : (this.document.activeElement instanceof HTMLElement ? this.document.activeElement : null);
+        const state = {
+            dialog,
+            trigger,
+            initialFocus: options.initialFocus || null,
+            onRequestClose: options.onRequestClose || null
+        };
+        this.stack.push(state);
+        dialog.hidden = false;
+        dialog.classList.add('is-open');
+        dialog.removeAttribute('aria-hidden');
+        this.document.body.classList.add('dialog-open');
+        this.updateIsolation();
+        this.focusInitial(state);
+        return state;
+    }
+
+    close(dialogOrId) {
+        const dialog = this.resolve(dialogOrId);
+        const stateIndex = this.stack.findIndex(state => state.dialog === dialog);
+        if (stateIndex < 0) return false;
+
+        const [state] = this.stack.splice(stateIndex, 1);
+        state.dialog.classList.remove('is-open');
+        state.dialog.hidden = true;
+        state.dialog.inert = false;
+        state.dialog.removeAttribute('aria-hidden');
+
+        const active = this.activeState();
+        if (active) {
+            this.updateIsolation();
+            const returnTarget = state.trigger && active.dialog.contains(state.trigger)
+                ? state.trigger
+                : null;
+            (returnTarget || this.firstFocusable(active.dialog) || active.dialog).focus({ preventScroll: true });
+        } else {
+            this.restoreIsolation();
+            this.document.body.classList.remove('dialog-open');
+            if (state.trigger?.isConnected && !state.trigger.closest('[inert]')) {
+                state.trigger.focus({ preventScroll: true });
+            }
+        }
+        return true;
+    }
+
+    requestClose(state = this.activeState()) {
+        if (!state) return;
+        if (typeof state.onRequestClose === 'function') state.onRequestClose();
+        else this.close(state.dialog);
+    }
+
+    focusInitial(state) {
+        let target = state.initialFocus;
+        if (typeof target === 'string') target = state.dialog.querySelector(target);
+        if (!(target instanceof HTMLElement) || target.hidden || target.matches(':disabled')) {
+            target = this.firstFocusable(state.dialog) || state.dialog;
+        }
+        if (target === state.dialog && !target.hasAttribute('tabindex')) target.tabIndex = -1;
+        target.focus({ preventScroll: true });
+    }
+
+    focusableElements(dialog) {
+        return Array.from(dialog.querySelectorAll(this.focusableSelector)).filter(element => {
+            if (!(element instanceof HTMLElement)) return false;
+            if (element.hidden || element.closest('[hidden], [inert]')) return false;
+            return element.getClientRects().length > 0;
+        });
+    }
+
+    firstFocusable(dialog) {
+        return this.focusableElements(dialog)[0] || null;
+    }
+
+    handleKeydown(event) {
+        const active = this.activeState();
+        if (!active) return;
+
+        if (event.key === 'Escape') {
+            event.preventDefault();
+            event.stopPropagation();
+            this.requestClose(active);
+            return;
+        }
+        if (event.key !== 'Tab') return;
+
+        const focusable = this.focusableElements(active.dialog);
+        if (focusable.length === 0) {
+            event.preventDefault();
+            active.dialog.focus({ preventScroll: true });
+            return;
+        }
+
+        const first = focusable[0];
+        const last = focusable[focusable.length - 1];
+        const current = this.document.activeElement;
+        if (!active.dialog.contains(current)) {
+            event.preventDefault();
+            first.focus({ preventScroll: true });
+        } else if (event.shiftKey && current === first) {
+            event.preventDefault();
+            last.focus({ preventScroll: true });
+        } else if (!event.shiftKey && current === last) {
+            event.preventDefault();
+            first.focus({ preventScroll: true });
+        }
+    }
+
+    updateIsolation() {
+        const active = this.activeState();
+        if (!active) return;
+        Array.from(this.document.body.children).forEach(element => {
+            const exempt = element === active.dialog || element.matches('script, [data-live-region], .toast');
+            if (!this.originalInert.has(element)) this.originalInert.set(element, element.inert === true);
+            element.inert = !exempt;
+        });
+        this.stack.forEach(state => {
+            const isActive = state === active;
+            state.dialog.inert = !isActive;
+            if (isActive) state.dialog.removeAttribute('aria-hidden');
+            else state.dialog.setAttribute('aria-hidden', 'true');
+        });
+    }
+
+    restoreIsolation() {
+        this.originalInert.forEach((wasInert, element) => {
+            if (element.isConnected) element.inert = wasInert;
+        });
+        this.originalInert.clear();
+    }
+}
 
 class TravelPlanner {
     constructor() {
@@ -12,21 +230,43 @@ class TravelPlanner {
         this.polyline = null;
         this.polylines = []; // 用于存储多彩路线段
         this.isMapLoaded = false;
-        this.placesService = null;
-        this.geocoder = null;
-        this.directionsService = null;
         this.directionsRenderer = null;
-        this.distanceMatrixService = null;
+        this.bff = new ClientSecurity.BffClient({ timeoutMs: 8000 });
+        if (!PerformanceCore) throw new Error('性能管线模块未加载，已中止应用初始化');
 
-        // 工具函数：转义 HTML 字符以防止 XSS
-        this.escapeHTML = (str) => {
-            if (!str) return '';
-            return String(str)
-                .replace(/&/g, '&amp;')
-                .replace(/</g, '&lt;')
-                .replace(/>/g, '&gt;')
-                .replace(/"/g, '&quot;')
-                .replace(/'/g, '&#39;');
+        this.taskGenerations = new PerformanceCore.GenerationRegistry();
+        this.routeResultCache = new Map();
+        this.routeRequestCoordinator = new PerformanceCore.RequestCoordinator({
+            cache: this.routeResultCache,
+            cacheTtlMs: 10 * 60 * 1000,
+            maxConcurrency: 4,
+            maxRetries: 2,
+            baseDelayMs: 150
+        });
+        this.routeResultProvider = new PerformanceCore.RouteResultProvider({
+            coordinator: this.routeRequestCoordinator,
+            coordinatePrecision: PerformanceCore.ROUTE_COORDINATE_PRECISION,
+            algorithmVersion: PerformanceCore.ROUTE_ALGORITHM_VERSION,
+            fetchRoute: (request, options) => this.fetchProviderRouteResult(request, options)
+        });
+        this.routeResults = new Map();
+        this.routeResultSignature = '';
+        this.routeCalculationPromise = null;
+        this.routePipelineTimer = null;
+        this.stateRevision = 0;
+        this.renderCommitCount = 0;
+        this.performanceMetrics = {
+            stateCommits: 0,
+            renderCommits: 0,
+            asyncStateCommits: 0,
+            businessRenderCommits: 0,
+            asyncRenderCommits: 0,
+            listNodesCreated: 0,
+            listNodesReused: 0,
+            markerCreates: 0,
+            markerUpdates: 0,
+            markerDeletes: 0,
+            labelCollisionComparisons: 0
         };
 
         // 防抖函数辅助
@@ -39,9 +279,14 @@ class TravelPlanner {
         };
 
         // API调用缓存和优化机制
-        this.distanceCache = new Map(); // 距离计算缓存：key: "fromLng,fromLat-toLng,toLat", value: {distance, duration, timestamp}
-        this.routeCache = new Map(); // 路线计算缓存：key: "origin-destination", value: {coordinates, distance, duration, timestamp}
+        // 距离和路线共享同一份 Provider RouteResult 缓存。
+        this.distanceCache = this.routeResultCache;
+        this.routeCache = this.routeResultCache;
+        this.routeMetrics = new Map(); // 路段业务状态只保存米和秒，不从 DOM 文案反向解析
+        this.totalMetrics = PlannerData.createRouteMetrics(0, 0);
+        this.totalMetricSource = 'unavailable';
         this.searchCache = new Map(); // 搜索结果缓存：key: keyword, value: {results, timestamp}
+        this.currentSearchResults = []; // 搜索结果只通过索引关联，不把不可信字段塞进属性
         this.cacheTimeout = 10 * 60 * 1000; // 缓存10分钟
         this.lastTravelListHash = ''; // 用于检测列表变化的哈希值
         this.calculateDistancesTimeout = null; // 距离计算防抖定时器
@@ -49,6 +294,9 @@ class TravelPlanner {
 
         // 路线配置：为每个路线段存储交通方式和地图提供商
         this.routeSegments = new Map(); // key: "fromId-toId", value: { travelMode: "DRIVING", mapProvider: "baidu" }
+        this.routePlanOptions = { roundTrip: false, travelMode: 'DRIVING' };
+        this.pendingOptimization = null;
+        this.optimizationSnapshot = null;
 
         // 城市过滤功能
         this.currentCityFilter = 'all'; // 'all' 或具体城市名
@@ -72,12 +320,7 @@ class TravelPlanner {
         this.settings = {
             navigationApp: 'amap', // 默认使用高德地图
             selectedMapApi: 'gaode', // 默认使用高德地图作为地图显示API
-            apiKeys: {
-                google: '', // Google Maps API密钥
-                gaode: '', // 高德地图API密钥
-                bing: '', // Bing Maps API密钥
-                tianditu: '' // 天地图API密钥
-            },
+            advancedByokEnabled: false,
             preferences: {
                 openInNewTab: true, // 在新标签页中打开导航
                 showNavigationHint: true, // 显示导航操作提示
@@ -85,6 +328,17 @@ class TravelPlanner {
                 showNavigateToButton: true // 显示"导航至此处"按钮
             }
         };
+        this.searchController = new Search.SearchController({
+            search: (context, options) => this.fetchSearchResults(context, options),
+            demoSearch: context => this.getDemoSearchResults(context),
+            onStateChange: state => this.renderSearchState(state),
+            unconfiguredBehavior: PublicConfig.search?.unconfiguredBehavior,
+            debounceMs: 500,
+            cacheTtlMs: this.cacheTimeout,
+            cache: this.searchCache,
+            maxRetries: 2,
+            retryBaseDelayMs: 150
+        });
 
         // 标记状态管理
         this.markersCleared = false;
@@ -103,14 +357,295 @@ class TravelPlanner {
 
         // 导入冲突处理状态
         this.pendingImportData = null;
+        this.pendingConflicts = [];
         this.conflictResolutions = new Map(); // 存储冲突解决方案
 
         // ID生成计数器，确保唯一性
         this.idCounter = 0;
+        this.eventsBound = false;
+        this.dialogManager = new DialogManager(document);
+
+        // 任何读取前先恢复未完成的导入事务，再执行安全清理和版本迁移。
+        this.recoveredImportTransaction = PlannerData.recoverPendingTransaction(localStorage);
+        this.storageMigration = ClientSecurity.migrateLegacyStorage(localStorage);
+        try {
+            this.dataMigration = PlannerData.migrateStoredData(localStorage);
+        } catch (error) {
+            this.dataMigrationError = error;
+            console.error('本地数据显式迁移失败:', error);
+        }
 
         // 首先加载已保存的设置，然后再初始化应用
-        console.log('🏗️ TravelPlanner构造函数被调用');
         this.initializeApp();
+    }
+
+    createElement(tagName, options = {}) {
+        const element = document.createElement(tagName);
+        if (options.className) element.className = options.className;
+        if (options.text !== undefined) element.textContent = String(options.text);
+        if (options.title !== undefined) element.title = String(options.title);
+        if (options.type) element.type = options.type;
+        if (options.id) element.id = options.id;
+        if (options.disabled !== undefined) element.disabled = Boolean(options.disabled);
+        if (options.attributes) {
+            Object.entries(options.attributes).forEach(([name, value]) => {
+                if (value !== undefined && value !== null) element.setAttribute(name, String(value));
+            });
+        }
+
+        if (options.dataset) {
+            Object.entries(options.dataset).forEach(([key, value]) => {
+                element.dataset[key] = String(value);
+            });
+        }
+
+        return element;
+    }
+
+    replaceWithMessage(container, message, className = '') {
+        const messageElement = this.createElement('div', { className, text: message });
+        container.replaceChildren(messageElement);
+        return messageElement;
+    }
+
+    appendLabeledText(container, label, value) {
+        const paragraph = this.createElement('p');
+        const strong = this.createElement('strong', { text: label });
+        paragraph.append(strong, document.createTextNode(` ${String(value ?? '')}`));
+        container.appendChild(paragraph);
+        return paragraph;
+    }
+
+    getUsablePlaces(places = this.travelList) {
+        return PlannerData.getUsablePlaces(places);
+    }
+
+    getPlaceById(placeId) {
+        return this.travelList.find(place => String(place.id) === String(placeId));
+    }
+
+    getSchemeById(schemes, schemeId) {
+        return schemes.find(scheme => String(scheme.id) === String(schemeId));
+    }
+
+    hasCurrentSchemeBinding() {
+        return this.currentSchemeId !== null &&
+            this.currentSchemeId !== undefined &&
+            this.currentSchemeId !== '';
+    }
+
+    getCurrentScheme(schemes) {
+        if (!Array.isArray(schemes)) return null;
+
+        if (this.hasCurrentSchemeBinding()) {
+            const schemeById = this.getSchemeById(schemes, this.currentSchemeId);
+            if (schemeById) return schemeById;
+        }
+
+        // 旧数据或导入后的 ID 可能已重映射；名称仍唯一时可恢复当前方案关联。
+        const currentName = String(this.currentSchemeName ?? '');
+        if (!currentName) return null;
+        const schemesByName = schemes.filter(scheme => String(scheme.name) === currentName);
+        return schemesByName.length === 1 ? schemesByName[0] : null;
+    }
+
+    // 唯一业务写入口：action 先生成下一状态，再执行一次同步 render commit。
+    dispatch(action = {}) {
+        if (!action || typeof action.type !== 'string') throw new TypeError('action.type is required');
+        const transition = this.reduceAction(action);
+        if (!transition.changed) return { changed: false, revision: this.stateRevision };
+
+        this.stateRevision = (this.stateRevision || 0) + 1;
+        if (this.performanceMetrics) {
+            if (action.type === 'ROUTE_RESULTS_RESOLVED') this.performanceMetrics.asyncStateCommits += 1;
+            else this.performanceMetrics.stateCommits += 1;
+        }
+        this.commitState(action, transition.effects || {});
+        return { changed: true, revision: this.stateRevision };
+    }
+
+    reduceAction(action) {
+        const effects = {
+            renderList: true,
+            syncMarkers: true,
+            routeChanged: true,
+            persist: action.persist !== false,
+            markModified: action.markModified !== false
+        };
+        const places = Array.isArray(this.travelList) ? this.travelList : [];
+
+        switch (action.type) {
+            case 'ADD_PLACE': {
+                if (!action.place || action.place.id === undefined || action.place.id === null) return { changed: false };
+                if (places.some(place => String(place.id) === String(action.place.id))) return { changed: false };
+                this.travelList = places.concat({ ...action.place });
+                return { changed: true, effects };
+            }
+            case 'ADD_BLANK_PLACE': {
+                if (!action.place || action.place.id === undefined || action.place.id === null) return { changed: false };
+                this.travelList = [{ ...action.place }, ...places];
+                effects.routeChanged = false;
+                return { changed: true, effects };
+            }
+            case 'EDIT_PLACE': {
+                const index = places.findIndex(place => String(place.id) === String(action.id));
+                if (index < 0) return { changed: false };
+                const nextPlace = { ...places[index] };
+                const result = PlannerData.applyPlaceEdit(nextPlace, action.customName, action.notes);
+                this.travelList = places.map((place, placeIndex) => placeIndex === index ? nextPlace : place);
+                effects.routeChanged = false;
+                effects.displayName = result.displayName;
+                return { changed: true, effects };
+            }
+            case 'TOGGLE_PLACE_STATUS': {
+                const index = places.findIndex(place => String(place.id) === String(action.id));
+                if (index < 0) return { changed: false };
+                const toggled = { ...places[index], isPending: !places[index].isPending };
+                const remaining = places.filter((_, placeIndex) => placeIndex !== index);
+                if (toggled.isPending) {
+                    this.travelList = remaining.concat(toggled);
+                } else {
+                    const lastActive = remaining.reduce((result, place, placeIndex) => place.isPending ? result : placeIndex + 1, 0);
+                    this.travelList = remaining.slice(0, lastActive).concat(toggled, remaining.slice(lastActive));
+                }
+                effects.toggledPlace = toggled;
+                return { changed: true, effects };
+            }
+            case 'REORDER_PLACES': {
+                const from = places.findIndex(place => String(place.id) === String(action.draggedId));
+                const to = places.findIndex(place => String(place.id) === String(action.targetId));
+                if (from < 0 || to < 0 || from === to) return { changed: false };
+                const next = places.slice();
+                const [moved] = next.splice(from, 1);
+                next.splice(to, 0, moved);
+                this.travelList = next;
+                effects.routeChanged = !moved.isBlank;
+                return { changed: true, effects };
+            }
+            case 'REMOVE_PLACE': {
+                const next = places.filter(place => String(place.id) !== String(action.id));
+                if (next.length === places.length) return { changed: false };
+                this.travelList = next;
+                return { changed: true, effects };
+            }
+            case 'REPLACE_PLAN': {
+                this.travelList = Array.isArray(action.travelList) ? action.travelList.map(place => ({ ...place })) : [];
+                this.routeSegments = new Map(Array.isArray(action.routeSegments) ? action.routeSegments : []);
+                if (action.currentSchemeId !== undefined) this.currentSchemeId = action.currentSchemeId;
+                if (action.currentSchemeName !== undefined) this.currentSchemeName = action.currentSchemeName;
+                if (action.hasUnsavedChanges !== undefined) this.hasUnsavedChanges = action.hasUnsavedChanges === true;
+                effects.markModified = action.markModified === true;
+                effects.persist = action.persist !== false;
+                return { changed: true, effects };
+            }
+            case 'APPLY_ROUTE_ORDER': {
+                if (!Array.isArray(action.travelList)) return { changed: false };
+                this.travelList = action.travelList.map(place => ({ ...place }));
+                if (action.routeSegments) this.routeSegments = new Map(action.routeSegments);
+                if (action.routePlanOptions) this.routePlanOptions = { ...action.routePlanOptions };
+                return { changed: true, effects };
+            }
+            case 'SET_ROUTE_OPTIONS': {
+                const nextOptions = { ...this.routePlanOptions, ...(action.options || {}) };
+                if (JSON.stringify(nextOptions) === JSON.stringify(this.routePlanOptions)) return { changed: false };
+                this.routePlanOptions = nextOptions;
+                effects.renderList = false;
+                effects.syncMarkers = false;
+                return { changed: true, effects };
+            }
+            case 'UPDATE_ROUTE_SEGMENT': {
+                const key = String(action.segmentKey || '');
+                if (!key) return { changed: false };
+                const previous = this.routeSegments.get(key) || { mapProvider: 'amap' };
+                const next = { ...previous, ...(action.config || {}) };
+                if (JSON.stringify(previous) === JSON.stringify(next)) return { changed: false };
+                this.routeSegments = new Map(this.routeSegments);
+                this.routeSegments.set(key, next);
+                effects.renderList = false;
+                effects.syncMarkers = false;
+                effects.routeChanged = false;
+                return { changed: true, effects };
+            }
+            case 'SET_SCHEME_BINDING': {
+                const nextId = action.currentSchemeId ?? null;
+                const nextName = action.currentSchemeName ?? null;
+                const nextUnsaved = action.hasUnsavedChanges === true;
+                if (String(this.currentSchemeId ?? '') === String(nextId ?? '') &&
+                    String(this.currentSchemeName ?? '') === String(nextName ?? '') &&
+                    this.hasUnsavedChanges === nextUnsaved) return { changed: false };
+                this.currentSchemeId = nextId;
+                this.currentSchemeName = nextName;
+                this.hasUnsavedChanges = nextUnsaved;
+                effects.renderList = false;
+                effects.syncMarkers = false;
+                effects.routeChanged = false;
+                effects.markModified = false;
+                return { changed: true, effects };
+            }
+            case 'ROUTE_RESULTS_RESOLVED': {
+                if (!action.tokens || !this.areRouteTokensCurrent(action.tokens)) return { changed: false };
+                this.routeResults = new Map(action.results || []);
+                this.routeMetrics = new Map(action.metrics || []);
+                this.totalMetrics = action.totalMetrics;
+                this.totalMetricSource = action.source;
+                this.routeResultSignature = action.signature;
+                effects.syncMarkers = false;
+                effects.routeChanged = false;
+                effects.persist = false;
+                effects.markModified = false;
+                effects.renderResolvedRoute = true;
+                return { changed: true, effects };
+            }
+            default:
+                throw new TypeError(`Unknown action: ${action.type}`);
+        }
+    }
+
+    commitState(action, effects) {
+        this.renderCommitCount = (this.renderCommitCount || 0) + 1;
+        if (this.performanceMetrics) {
+            this.performanceMetrics.renderCommits += 1;
+            if (action.type === 'ROUTE_RESULTS_RESOLVED') this.performanceMetrics.asyncRenderCommits += 1;
+            else this.performanceMetrics.businessRenderCommits += 1;
+        }
+
+        // 旧的无构造器嵌入测试没有运行时依赖，只保留最小兼容路径。
+        if (!this.taskGenerations) {
+            if (effects.markModified) this.markAsModified?.();
+            if (effects.renderList) this.updateTravelList?.();
+            if (effects.syncMarkers) this.recreateMarkers?.();
+            if (effects.routeChanged) {
+                this.calculateDistancesWithDebounce?.();
+                this.drawRoute?.();
+            }
+            if (effects.persist) this.saveData?.();
+            return;
+        }
+
+        if (effects.markModified) this.markAsModified();
+        if (effects.renderList) this.renderTravelListsIncremental();
+        if (effects.syncMarkers) this.syncMarkersIncremental();
+        this.updateCityFilterButton();
+
+        if (effects.renderResolvedRoute) {
+            this.renderDistanceState();
+            this.renderRouteResults(Array.from(this.routeResults.values()));
+        } else if (effects.routeChanged) {
+            this.scheduleRoutePipeline();
+        }
+        if (effects.persist) this.saveData();
+    }
+
+    normalizeStoredSettings(candidate) {
+        return ClientSecurity.safeSettings(candidate);
+    }
+
+    getSafeSettings() {
+        return ClientSecurity.safeSettings(this.settings);
+    }
+
+    normalizeUntrustedText(value, maxLength = 1000) {
+        return String(value ?? '').slice(0, maxLength);
     }
 
     // 生成基于名称和时间的UUID
@@ -155,11 +690,12 @@ class TravelPlanner {
 
         this.hasUnsavedChanges = true;
         this.updatePageTitle(); // 更新页面标题
+        this.announceSaveStatus('方案有未保存的更改');
 
         // 使用防抖处理自动保存，避免频繁写入
         if (!this.debouncedAutoSave) {
             this.debouncedAutoSave = this.debounce(() => {
-                if (this.currentSchemeId && this.currentSchemeName) {
+                if (this.hasCurrentSchemeBinding()) {
                     this.autoSaveCurrentScheme();
                 }
             }, 1000);
@@ -169,7 +705,7 @@ class TravelPlanner {
 
     // 自动保存到当前方案
     autoSaveCurrentScheme() {
-        if (!this.currentSchemeId || !this.currentSchemeName || this.isAutoSaving) {
+        if (!this.hasCurrentSchemeBinding() || this.isAutoSaving) {
             return;
         }
 
@@ -177,28 +713,36 @@ class TravelPlanner {
 
         try {
             const schemes = this.getSavedSchemes();
-            const currentScheme = schemes.find(s => s.id === this.currentSchemeId);
+            const currentScheme = this.getCurrentScheme(schemes);
 
             if (currentScheme) {
+                const bindingChanged = String(this.currentSchemeId) !== String(currentScheme.id) ||
+                    this.currentSchemeName !== currentScheme.name;
+                this.currentSchemeId = currentScheme.id;
+                this.currentSchemeName = currentScheme.name;
+
                 // 更新方案数据
                 currentScheme.travelList = [...this.travelList];
                 currentScheme.routeSegments = Array.from(this.routeSegments.entries());
-                currentScheme.settings = { ...this.settings };
-                currentScheme.placesCount = this.travelList.length;
+                currentScheme.placesCount = this.getUsablePlaces().length;
                 currentScheme.modifiedAt = new Date().toISOString();
-                currentScheme.version = '2.0';
+                currentScheme.version = PlannerData.BACKUP_VERSION;
+                currentScheme.schemaVersion = PlannerData.SCHEMA_VERSION;
 
                 // 保存更新后的方案列表
-                localStorage.setItem('travelSchemes', JSON.stringify(schemes));
+                localStorage.setItem('travelSchemes', JSON.stringify(ClientSecurity.sanitizePersistedRecord(schemes)));
 
                 // 标记为已保存
                 this.hasUnsavedChanges = false;
+                if (bindingChanged) this.saveData();
                 this.updatePageTitle(); // 更新页面标题
+                this.announceSaveStatus(`方案“${this.currentSchemeName}”已自动保存`);
 
-                console.log(`✅ 自动保存方案"${this.currentSchemeName}"成功`);
+                console.log('方案自动保存成功');
             }
         } catch (error) {
             console.error('自动保存失败:', error);
+            this.showToast('自动保存失败，请重试', 'assertive');
         } finally {
             this.isAutoSaving = false;
         }
@@ -208,7 +752,7 @@ class TravelPlanner {
     setupPageUnloadHandler() {
         window.addEventListener('beforeunload', (e) => {
             // 只有在有未保存更改且没有当前方案时才提醒
-            if (this.hasUnsavedChanges && !this.currentSchemeId && this.travelList.length > 0) {
+            if (this.hasUnsavedChanges && !this.hasCurrentSchemeBinding() && this.travelList.length > 0) {
                 const message = '您有未保存的旅游方案，确定要离开吗？';
                 e.preventDefault();
                 e.returnValue = message;
@@ -234,21 +778,25 @@ class TravelPlanner {
         document.title = title;
     }
 
+    announceSaveStatus(message) {
+        const region = document.getElementById('saveStatus');
+        if (!region) return;
+        region.textContent = '';
+        requestAnimationFrame(() => {
+            region.textContent = String(message);
+        });
+    }
+
     // 初始化应用程序
     initializeApp() {
-        console.log('🚀 开始初始化应用程序...');
-
         // 首先加载保存的设置
         this.loadSavedSettings();
-        console.log('📂 设置已加载');
 
         // 设置页面关闭时的提醒
         this.setupPageUnloadHandler();
-        console.log('🔔 页面关闭提醒已设置');
 
         // 然后检查并初始化地图
         this.waitForMapAPI();
-        console.log('🗺️ 地图API检查完成');
     }
 
     // 加载已保存的设置
@@ -260,38 +808,7 @@ class TravelPlanner {
 
                 // 恢复应用设置
                 if (data.settings) {
-                    this.settings = { ...this.settings, ...data.settings };
-
-                    // 确保API密钥设置结构完整
-                    if (!this.settings.apiKeys) {
-                        this.settings.apiKeys = { google: '', gaode: '', bing: '', tianditu: '' };
-                    }
-
-                    // 确保偏好设置结构完整
-                    if (!this.settings.preferences) {
-                        this.settings.preferences = {
-                            openInNewTab: true,
-                            showNavigationHint: true,
-                            showShowInMapButton: true,
-                            showNavigateToButton: true
-                        };
-                    }
-
-                    // 确保地图API选择设置完整
-                    if (!this.settings.selectedMapApi) {
-                        this.settings.selectedMapApi = 'google';
-                    }
-
-                    console.log('✅ 已加载保存的设置');
-
-                    // 显示API密钥状态
-                    const selectedMapApi = this.settings.selectedMapApi;
-                    const selectedApiKey = this.settings.apiKeys?.[selectedMapApi];
-                    if (selectedApiKey) {
-                        console.log(`🔑 检测到已保存的${selectedMapApi} API密钥，将自动应用`);
-                    } else {
-                        console.log(`⚠️ 未检测到${selectedMapApi} API密钥，将使用演示模式`);
-                    }
+                    this.settings = this.normalizeStoredSettings(data.settings);
                 }
             }
         } catch (error) {
@@ -321,29 +838,19 @@ class TravelPlanner {
     // 尝试动态加载选择的地图API
     tryLoadMapAPI() {
         const selectedMapApi = this.settings.selectedMapApi;
-        const apiKey = this.getApiKey(selectedMapApi);
-
-        console.log(`🔍 选择的地图API: ${selectedMapApi}`);
-        console.log(`🔑 API密钥状态: ${apiKey ? '已配置' : '未配置'}`);
+        const apiKey = this.getPublicSdkKey(selectedMapApi);
 
         if (selectedMapApi === 'google' && apiKey) {
-            console.log('🔑 使用Google Maps API作为地图显示服务...');
             this.loadGoogleMapsScript(apiKey);
         } else if (selectedMapApi === 'gaode' && apiKey) {
-            console.log('🔑 使用高德地图API作为地图显示服务...');
             this.loadGaodeMapScript(apiKey);
         } else if (selectedMapApi === 'tianditu' && apiKey) {
-            console.log('🔑 使用天地图API作为地图显示服务...');
             this.loadTiandituMapScript(apiKey);
-        } else if (selectedMapApi === 'bing' && apiKey) {
-            console.log('🔑 使用Bing Maps API作为地图显示服务（暂未实现）...');
-            // TODO: 实现Bing Maps API加载
+        } else if (selectedMapApi === 'azure' && apiKey) {
             setTimeout(() => {
                 this.initDemoMode();
             }, 1000);
         } else {
-            console.log(`⚠️ 未配置${selectedMapApi}API密钥或选择了未支持的API，使用演示模式`);
-            console.log(`设置详情:`, this.settings);
             setTimeout(() => {
                 this.initDemoMode();
             }, 1000);
@@ -360,18 +867,18 @@ class TravelPlanner {
 
         // 创建新的脚本标签
         const script = document.createElement('script');
-        script.src = `https://maps.googleapis.com/maps/api/js?key=${apiKey}&libraries=places&callback=initMap`;
+        script.src = Security.buildHttpsUrl(
+            'https://maps.googleapis.com',
+            '/maps/api/js',
+            { key: apiKey, callback: 'initMap' },
+            ['https://maps.googleapis.com']
+        );
         script.async = true;
         script.defer = true;
 
         script.onload = () => {
             console.log('✅ Google Maps API加载成功');
-            // 移除API配置提示横幅（如果存在）
-            const banner = document.getElementById('api-config-banner');
-            if (banner) {
-                document.body.removeChild(banner);
-                document.body.style.paddingTop = '0';
-            }
+            this.removeApiConfigPrompt();
         };
 
         script.onerror = () => {
@@ -395,7 +902,12 @@ class TravelPlanner {
 
         // 创建新的脚本标签（只加载地图显示所需的基础组件）
         const script = document.createElement('script');
-        script.src = `https://webapi.amap.com/maps?v=2.0&key=${apiKey}&plugin=AMap.Scale,AMap.ToolBar`;
+        script.src = Security.buildHttpsUrl(
+            'https://webapi.amap.com',
+            '/maps',
+            { v: '2.0', key: apiKey, plugin: 'AMap.Scale,AMap.ToolBar' },
+            ['https://webapi.amap.com']
+        );
         script.async = true;
         script.defer = true;
 
@@ -407,12 +919,7 @@ class TravelPlanner {
                 if (typeof AMap !== 'undefined') {
                     console.log('🗺️ AMap对象已可用，初始化应用');
 
-                    // 移除API配置提示横幅
-                    const banner = document.getElementById('api-config-banner');
-                    if (banner) {
-                        document.body.removeChild(banner);
-                        document.body.style.paddingTop = '0';
-                    }
+                    this.removeApiConfigPrompt();
 
                     if (!window.app || !window.app.settings) {
                         window.app = new TravelPlanner();
@@ -452,7 +959,12 @@ class TravelPlanner {
         }
 
         const script = document.createElement('script');
-        script.src = `https://api.tianditu.gov.cn/api?v=4.0&tk=${encodeURIComponent(apiKey)}`;
+        script.src = Security.buildHttpsUrl(
+            'https://api.tianditu.gov.cn',
+            '/api',
+            { v: '4.0', tk: apiKey },
+            ['https://api.tianditu.gov.cn']
+        );
         script.async = true;
         script.defer = true;
 
@@ -466,11 +978,7 @@ class TravelPlanner {
                 if (typeof T !== 'undefined' && T.Map) {
                     console.log('🗺️ 天地图T对象已可用，初始化应用');
 
-                    const banner = document.getElementById('api-config-banner');
-                    if (banner) {
-                        document.body.removeChild(banner);
-                        document.body.style.paddingTop = '0';
-                    }
+                    this.removeApiConfigPrompt();
 
                     if (window.app && window.app.settings) {
                         window.app.init();
@@ -553,88 +1061,67 @@ class TravelPlanner {
     // 显示API密钥配置提示
     showApiKeyConfigPrompt() {
         const selectedMapApi = this.settings.selectedMapApi;
-        const hasSelectedApiKey = this.getApiKey(selectedMapApi);
+        const hasSelectedApiKey = this.getPublicSdkKey(selectedMapApi);
 
-        if (!hasSelectedApiKey) {
-            // 添加API配置提示横幅
+        if (!hasSelectedApiKey && !document.getElementById('api-config-banner')) {
+            const messageHost = document.getElementById('systemMessages');
+            if (!messageHost) return;
+
             const banner = document.createElement('div');
             banner.id = 'api-config-banner';
-            banner.style.cssText = `
-                position: fixed;
-                top: 0;
-                left: 0;
-                right: 0;
-                background: linear-gradient(135deg, #f39c12, #e67e22);
-                color: white;
-                padding: 12px 20px;
-                text-align: center;
-                font-size: 14px;
-                font-weight: 500;
-                z-index: 9999;
-                box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
-                backdrop-filter: blur(10px);
-            `;
+            banner.className = 'api-config-banner';
+            banner.setAttribute('role', 'status');
 
             // 获取API的中文名称
             const apiNameMap = {
                 'google': 'Google Maps',
                 'gaode': '高德地图',
-                'bing': 'Bing Maps',
+                'azure': 'Azure Maps',
                 'tianditu': '天地图'
             };
             const apiDisplayName = apiNameMap[selectedMapApi] || selectedMapApi;
 
-            banner.innerHTML = `
-                🔑 为了获得完整的地图功能，请在设置中配置您的API密钥
-                // 🔑 为了获得完整的地图功能，请在设置中配置您的${apiDisplayName} API密钥
-                <button id="openApiSettingsBtn" style="
-                    margin-left: 15px;
-                    padding: 6px 12px;
-                    background: rgba(255, 255, 255, 0.2);
-                    border: 1px solid rgba(255, 255, 255, 0.3);
-                    border-radius: 6px;
-                    color: white;
-                    cursor: pointer;
-                    font-size: 12px;
-                    font-weight: 600;
-                    transition: all 0.3s ease;
-                " onmouseover="this.style.background='rgba(255, 255, 255, 0.3)'"
-                   onmouseout="this.style.background='rgba(255, 255, 255, 0.2)'">
-                    立即配置
-                </button>
-                <button id="dismissBannerBtn" style="
-                    margin-left: 10px;
-                    padding: 4px 8px;
-                    background: none;
-                    border: none;
-                    color: rgba(255, 255, 255, 0.8);
-                    cursor: pointer;
-                    font-size: 16px;
-                    font-weight: bold;
-                " title="关闭提示">
-                    ×
-                </button>
-            `;
+            const message = this.createElement('span', {
+                className: 'api-banner-message',
+                text: `未配置 ${apiDisplayName} 地图显示服务，当前为演示模式。`
+            });
 
-            document.body.appendChild(banner);
-
-            // 调整body的padding，避免内容被横幅遮挡
-            document.body.style.paddingTop = '60px';
+            const openSettingsButton = this.createElement('button', {
+                id: 'openApiSettingsBtn',
+                className: 'api-banner-config-btn',
+                text: '立即配置',
+                type: 'button'
+            });
+            const dismissButton = this.createElement('button', {
+                id: 'dismissBannerBtn',
+                className: 'api-banner-dismiss-btn',
+                text: '×',
+                title: '关闭提示',
+                type: 'button',
+                attributes: { 'aria-label': '关闭地图配置提示' }
+            });
+            banner.append(message, openSettingsButton, dismissButton);
+            messageHost.replaceChildren(banner);
 
             // 绑定事件
-            document.getElementById('openApiSettingsBtn').addEventListener('click', () => {
+            openSettingsButton.addEventListener('click', () => {
                 this.showSettingsModal();
             });
 
-            document.getElementById('dismissBannerBtn').addEventListener('click', () => {
-                document.body.removeChild(banner);
-                document.body.style.paddingTop = '0';
+            dismissButton.addEventListener('click', () => {
+                this.removeApiConfigPrompt();
             });
         }
     }
 
+    removeApiConfigPrompt() {
+        document.getElementById('api-config-banner')?.remove();
+    }
+
     // 设置事件监听器
     setupEventListeners() {
+        if (this.eventsBound) return;
+        this.eventsBound = true;
         console.log('🔧 开始设置事件监听器...');
 
         // 定期清理过期缓存
@@ -642,30 +1129,40 @@ class TravelPlanner {
 
         // 搜索相关
         const searchBtn = document.getElementById('searchBtn');
+        const resetSearchBtn = document.getElementById('resetSearchBtn');
         const searchInput = document.getElementById('searchInput');
 
         if (searchBtn) {
-            searchBtn.addEventListener('click', () => this.searchPlaces());
+            searchBtn.addEventListener('click', () => this.submitSearch());
+        }
+
+        if (resetSearchBtn) {
+            resetSearchBtn.addEventListener('click', () => this.resetSearch());
         }
 
         if (searchInput) {
-            // 添加防抖自动搜索
-            const debouncedSearch = this.debounce(() => this.searchPlaces(), 500);
             searchInput.addEventListener('input', (e) => {
-                if (e.target.value.trim().length >= 2) {
-                    debouncedSearch();
-                }
+                this.searchController.schedule(this.getSearchContext(e.target.value));
             });
 
-            searchInput.addEventListener('keypress', (e) => {
-                if (e.key === 'Enter') this.searchPlaces();
+            searchInput.addEventListener('keydown', (e) => {
+                if (e.key !== 'Enter') return;
+                e.preventDefault();
+                this.submitSearch();
             });
         }
+
+        document.getElementById('searchResults').addEventListener('click', event => this.handleSearchResultClick(event));
+        document.getElementById('travelList').addEventListener('click', event => this.handlePlaceListClick(event));
+        document.getElementById('pendingList').addEventListener('click', event => this.handlePlaceListClick(event));
+        document.getElementById('savedSchemesList').addEventListener('click', event => this.handleSavedSchemeClick(event));
+        document.getElementById('conflictList').addEventListener('change', event => this.handleConflictResolutionChange(event));
 
         // 列表控制按钮
         document.getElementById('addBlankPlaceBtn').addEventListener('click', () => this.addBlankPlace());
         document.getElementById('clearAllBtn').addEventListener('click', () => this.clearAllPlaces());
         document.getElementById('optimizeRouteBtn').addEventListener('click', () => this.optimizeRoute());
+        document.getElementById('undoOptimizeBtn').addEventListener('click', () => this.undoRouteOptimization());
         document.getElementById('showRouteBtn').addEventListener('click', () => this.showRoute());
 
         // 地图控制按钮
@@ -690,29 +1187,131 @@ class TravelPlanner {
         // 模态框
         this.setupModalEventListeners();
 
-        // 点击模态框外部关闭
-        window.addEventListener('click', (e) => {
-            const placeModal = document.getElementById('placeModal');
-            const saveSchemeModal = document.getElementById('saveSchemeModal');
-            const importModal = document.getElementById('importModal');
-            const exportModal = document.getElementById('exportModal');
-            const settingsModal = document.getElementById('settingsModal');
-            const editPlaceModal = document.getElementById('editPlaceModal');
+        // 遮罩点击、Escape、Tab 焦点陷阱与触发点恢复由 DialogManager 统一处理。
+    }
 
-            if (e.target === placeModal) {
-                this.closeModal();
-            } else if (e.target === saveSchemeModal) {
-                this.closeSaveSchemeModal();
-            } else if (e.target === importModal) {
-                this.closeImportModal();
-            } else if (e.target === exportModal) {
-                this.closeExportModal();
-            } else if (e.target === settingsModal) {
-                this.closeSettingsModal();
-            } else if (e.target === editPlaceModal) {
-                this.closeEditPlaceModal();
+    handleSearchResultClick(event) {
+        const action = event.target.closest('[data-search-action]')?.dataset.searchAction;
+        if (action === 'configure') {
+            this.showSettingsModal();
+            return;
+        }
+        const item = event.target.closest('.search-result-item[data-result-index]');
+        if (!item || !event.currentTarget.contains(item)) return;
+
+        const resultIndex = Number(item.dataset.resultIndex);
+        const place = this.currentSearchResults[resultIndex];
+        if (!place || !PlannerData.isValidCoordinate(place)) return;
+
+        const placeData = {
+            name: String(place.name ?? ''),
+            address: String(place.address ?? ''),
+            lng: Number(place.lng),
+            lat: Number(place.lat)
+        };
+
+        this.showPlaceModal(placeData);
+        if (this.isMapLoaded) {
+            const selectedMapApi = this.settings.selectedMapApi;
+            if (selectedMapApi === 'gaode') {
+                this.map.setCenter([placeData.lng, placeData.lat]);
+            } else if (selectedMapApi === 'tianditu') {
+                this.map.centerAndZoom(new T.LngLat(placeData.lng, placeData.lat), 15);
+            } else {
+                this.map.setCenter({ lat: placeData.lat, lng: placeData.lng });
+                this.map.setZoom(15);
             }
-        });
+        }
+    }
+
+    handlePlaceListClick(event) {
+        const button = event.target.closest('button[data-action]');
+        if (!button || !event.currentTarget.contains(button)) return;
+
+        const action = button.dataset.action;
+        if (action === 'navigate-route') {
+            this.openNavigationRoute(
+                button.dataset.segmentKey,
+                Number(button.dataset.fromIndex),
+                Number(button.dataset.toIndex)
+            );
+            return;
+        }
+
+        const item = button.closest('[data-id]');
+        const place = item ? this.getPlaceById(item.dataset.id) : null;
+        if (!place) return;
+
+        const displayName = String(place.customName || place.name || '');
+        const address = String(place.address || '');
+        const lat = Number(place.lat);
+        const lng = Number(place.lng);
+
+        switch (action) {
+            case 'toggle-status':
+                this.togglePlaceStatus(String(place.id));
+                break;
+            case 'locate':
+                if (PlannerData.isValidCoordinate(place)) this.locatePlace(lng, lat);
+                break;
+            case 'show-in-map':
+                if (PlannerData.isValidCoordinate(place)) this.showInMap(lng, lat, displayName);
+                break;
+            case 'navigate-to':
+                if (PlannerData.isValidCoordinate(place)) this.navigateToPlace(lng, lat, displayName);
+                break;
+            case 'edit':
+                this.editPlace(String(place.id));
+                break;
+            case 'copy-name':
+                this.copyPlaceName(displayName);
+                break;
+            case 'copy-address':
+                this.copyPlaceAddress(address);
+                break;
+            case 'remove':
+                this.removePlaceFromList(String(place.id));
+                break;
+            case 'move-up':
+                this.movePlaceByOffset(String(place.id), -1);
+                break;
+            case 'move-down':
+                this.movePlaceByOffset(String(place.id), 1);
+                break;
+        }
+    }
+
+    handleSavedSchemeClick(event) {
+        const button = event.target.closest('button[data-action][data-id]');
+        if (!button || !event.currentTarget.contains(button)) return;
+
+        if (button.dataset.action === 'load-scheme') {
+            this.loadScheme(button.dataset.id);
+        } else if (button.dataset.action === 'delete-scheme') {
+            this.deleteScheme(button.dataset.id);
+        }
+    }
+
+    handleConflictResolutionChange(event) {
+        const radio = event.target.closest('input[type="radio"][data-conflict-index]');
+        if (!radio || !event.currentTarget.contains(radio)) return;
+
+        const index = Number(radio.dataset.conflictIndex);
+        const renameInput = document.getElementById(`renameInput_${index}`);
+        if (!renameInput) return;
+
+        const needsRename = radio.value === 'rename' || radio.value === 'both';
+        renameInput.style.display = needsRename ? 'block' : 'none';
+        if (!needsRename) return;
+
+        const newNameInput = document.getElementById(`newName_${index}`);
+        const conflict = this.pendingConflicts[index];
+        if (!newNameInput || !conflict) return;
+
+        if (radio.value === 'both') {
+            newNameInput.value = `${String(conflict.importScheme.name || '')} (${new Date().toLocaleDateString('zh-CN')})`;
+        }
+        this.addRenameInputListener(newNameInput, index);
     }
 
     // 设置所有模态框的事件监听器
@@ -724,6 +1323,7 @@ class TravelPlanner {
         // 储存方案模态框
         document.querySelector('#saveSchemeModal .close').addEventListener('click', () => this.closeSaveSchemeModal());
         document.getElementById('saveNewSchemeBtn').addEventListener('click', () => this.saveNewScheme());
+        document.getElementById('newBlankSchemeBtn').addEventListener('click', () => this.createBlankScheme());
         document.getElementById('schemeNameInput').addEventListener('keypress', (e) => {
             if (e.key === 'Enter') this.saveNewScheme();
         });
@@ -767,6 +1367,10 @@ class TravelPlanner {
         document.querySelector('#settingsModal .close').addEventListener('click', () => this.closeSettingsModal());
         document.getElementById('saveSettingsBtn').addEventListener('click', () => this.saveSettings());
         document.getElementById('cancelSettingsBtn').addEventListener('click', () => this.closeSettingsModal());
+        const advancedByokToggle = document.getElementById('advancedByokEnabled');
+        if (advancedByokToggle) {
+            advancedByokToggle.addEventListener('change', () => this.updateAdvancedByokVisibility());
+        }
 
         // 设置菜单切换
         this.setupSettingsMenuToggle();
@@ -776,88 +1380,100 @@ class TravelPlanner {
         document.getElementById('saveEditBtn').addEventListener('click', () => this.saveEditPlace());
         document.getElementById('cancelEditBtn').addEventListener('click', () => this.closeEditPlaceModal());
 
-        // 移动端紧凑模式
-        this.setupMobileCompactMode();
+        // 路线建议只在用户确认后写回；关闭或返回不会改变当前方案。
+        document.querySelector('#routeOptimizationModal .optimization-close').addEventListener('click', () => this.closeOptimizationModal());
+        document.getElementById('cancelOptimizationBtn').addEventListener('click', () => this.closeOptimizationModal());
+        document.getElementById('dismissSuggestionBtn').addEventListener('click', () => this.closeOptimizationModal());
+        document.getElementById('calculateSuggestionBtn').addEventListener('click', () => this.generateRouteSuggestion());
+        document.getElementById('applySuggestionBtn').addEventListener('click', () => this.applyRouteSuggestion());
+        document.getElementById('reconfigureOptimizationBtn').addEventListener('click', () => this.showOptimizationSetup());
+        document.getElementById('optimizationRoundTrip').addEventListener('change', () => this.updateOptimizationEndpointState());
+        document.getElementById('optimizationStart').addEventListener('change', () => this.updateOptimizationEndpointState());
+
+        this.setupResponsiveChromeSizing();
+        this.setupMobileViewNavigation();
     }
 
-    // 设置移动端紧凑模式
-    setupMobileCompactMode() {
-        const compactModeBtn = document.getElementById('compactModeBtn');
-        const compactToggleFloating = document.getElementById('compactToggleFloating');
+    setupResponsiveChromeSizing() {
+        const root = document.documentElement;
+        const chromeElements = [
+            document.querySelector('header'),
+            document.getElementById('systemMessages'),
+            document.querySelector('.page-footer')
+        ].filter(Boolean);
 
-        // 检测是否为移动设备
-        const isMobile = () => {
-            return window.innerWidth <= 768 ||
-                /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+        const updateChromeHeight = () => {
+            const height = chromeElements.reduce((total, element) => {
+                return total + element.getBoundingClientRect().height;
+            }, 0);
+            root.style.setProperty('--app-chrome-height', `${height}px`);
         };
 
-        // 更新按钮显示状态
-        const updateButtonVisibility = () => {
-            if (isMobile()) {
-                compactModeBtn.style.display = 'inline-block';
-            } else {
-                compactModeBtn.style.display = 'none';
-                // 如果不是移动设备，确保退出紧凑模式
-                if (document.body.classList.contains('mobile-compact-mode')) {
-                    this.toggleMobileCompactMode(false);
+        if ('ResizeObserver' in window) {
+            this.chromeResizeObserver = new ResizeObserver(updateChromeHeight);
+            chromeElements.forEach(element => this.chromeResizeObserver.observe(element));
+        } else {
+            window.addEventListener('resize', updateChromeHeight, { passive: true });
+        }
+        updateChromeHeight();
+    }
+
+    setupMobileViewNavigation() {
+        const container = document.querySelector('.container');
+        const itineraryView = document.getElementById('itineraryView');
+        const mapView = document.getElementById('mapView');
+        const viewButtons = Array.from(document.querySelectorAll('[data-mobile-view]'));
+        const mobileMedia = window.matchMedia('(max-width: 768px)');
+        const scrollPositions = { itinerary: 0, map: 0 };
+        let activeView = localStorage.getItem('mobilePrimaryView') === 'map' ? 'map' : 'itinerary';
+
+        const syncView = (nextView = activeView, restoreScroll = true) => {
+            if (!mobileMedia.matches) {
+                container.removeAttribute('data-mobile-view');
+                itineraryView.removeAttribute('aria-hidden');
+                mapView.removeAttribute('aria-hidden');
+                return;
+            }
+
+            if (nextView !== activeView) {
+                scrollPositions[activeView] = window.scrollY;
+            }
+            activeView = nextView;
+            container.dataset.mobileView = activeView;
+            itineraryView.setAttribute('aria-hidden', String(activeView !== 'itinerary'));
+            mapView.setAttribute('aria-hidden', String(activeView !== 'map'));
+            viewButtons.forEach(button => {
+                const isCurrent = button.dataset.mobileView === activeView;
+                button.classList.toggle('is-active', isCurrent);
+                if (isCurrent) {
+                    button.setAttribute('aria-current', 'page');
+                } else {
+                    button.removeAttribute('aria-current');
                 }
-            }
+            });
+            localStorage.setItem('mobilePrimaryView', activeView);
+
+            requestAnimationFrame(() => {
+                if (activeView === 'map') {
+                    window.dispatchEvent(new Event('resize'));
+                }
+                if (restoreScroll) {
+                    window.scrollTo({ top: scrollPositions[activeView], behavior: 'instant' });
+                }
+            });
         };
 
-        // 切换紧凑模式
-        this.toggleMobileCompactMode = (enable) => {
-            if (enable === undefined) {
-                enable = !document.body.classList.contains('mobile-compact-mode');
-            }
-
-            if (enable) {
-                document.body.classList.add('mobile-compact-mode');
-                compactModeBtn.classList.add('active');
-                compactModeBtn.innerHTML = '✅ 紧凑';
-                compactModeBtn.title = '紧凑模式已启用';
-                compactToggleFloating.style.display = 'block';
-
-                // 保存紧凑模式状态
-                localStorage.setItem('mobileCompactMode', 'true');
-
-                this.showToast('🎯 已启用紧凑模式，获得更多显示空间');
-            } else {
-                document.body.classList.remove('mobile-compact-mode');
-                compactModeBtn.classList.remove('active');
-                compactModeBtn.innerHTML = '📱 紧凑';
-                compactModeBtn.title = '紧凑模式';
-                compactToggleFloating.style.display = 'none';
-
-                // 清除紧凑模式状态
-                localStorage.removeItem('mobileCompactMode');
-
-                this.showToast('📱 已退出紧凑模式');
-            }
-        };
-
-        // 绑定事件监听器
-        if (compactModeBtn) {
-            compactModeBtn.addEventListener('click', () => {
-                this.toggleMobileCompactMode();
-            });
-        }
-
-        if (compactToggleFloating) {
-            compactToggleFloating.addEventListener('click', () => {
-                this.toggleMobileCompactMode(false);
-            });
-        }
-
-        // 窗口大小变化时更新按钮显示
-        window.addEventListener('resize', updateButtonVisibility);
-
-        // 初始化时更新按钮显示
-        updateButtonVisibility();
-
-        // 恢复之前的紧凑模式状态
-        if (isMobile() && localStorage.getItem('mobileCompactMode') === 'true') {
-            this.toggleMobileCompactMode(true);
-        }
+        viewButtons.forEach(button => {
+            button.addEventListener('click', () => syncView(button.dataset.mobileView));
+        });
+        document.getElementById('mobileSchemesBtn')?.addEventListener('click', () => {
+            document.getElementById('saveSchemeBtn')?.click();
+        });
+        document.getElementById('mobileSettingsBtn')?.addEventListener('click', () => {
+            document.getElementById('settingsBtn')?.click();
+        });
+        mobileMedia.addEventListener('change', () => syncView(activeView, false));
+        syncView(activeView, false);
     }
 
     // 初始化Google地图
@@ -915,27 +1531,17 @@ class TravelPlanner {
                                 transition: opacity 0.2s ease;
                                 opacity: 0;
                             `;
-                            this.line.innerHTML = `
-                                <line x1="0" y1="0" x2="0" y2="0"
-                                    style="stroke: rgba(102, 126, 234, 0.6); stroke-width: 2; stroke-dasharray: 4,3;" />
-                            `;
+                            const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+                            line.setAttribute('x1', '0');
+                            line.setAttribute('y1', '0');
+                            line.setAttribute('x2', '0');
+                            line.setAttribute('y2', '0');
+                            line.style.stroke = 'rgba(102, 126, 234, 0.6)';
+                            line.style.strokeWidth = '2';
+                            line.style.strokeDasharray = '4,3';
+                            this.line.appendChild(line);
 
-                            // 分离编号和名称的样式
-                            const parts = this.text.split('. ');
-                            if (parts.length === 2) {
-                                this.div.innerHTML = `
-                                    <span style="
-                                        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-                                        -webkit-background-clip: text;
-                                        -webkit-text-fill-color: transparent;
-                                        background-clip: text;
-                                        font-weight: 800;
-                                        margin-right: 4px;
-                                    ">${parts[0]}.</span><span>${parts[1]}</span>
-                                `;
-                            } else {
-                                this.div.textContent = this.text;
-                            }
+                            renderGooglePlaceLabel(this.div, this.text);
 
                             // 添加到地图覆盖层
                             const panes = this.getPanes();
@@ -1027,21 +1633,7 @@ class TravelPlanner {
                         setText(text) {
                             this.text = text;
                             if (this.div) {
-                                const parts = text.split('. ');
-                                if (parts.length === 2) {
-                                    this.div.innerHTML = `
-                                        <span style="
-                                            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-                                            -webkit-background-clip: text;
-                                            -webkit-text-fill-color: transparent;
-                                            background-clip: text;
-                                            font-weight: 800;
-                                            margin-right: 4px;
-                                        ">${parts[0]}.</span><span>${parts[1]}</span>
-                                    `;
-                                } else {
-                                    this.div.textContent = text;
-                                }
+                                renderGooglePlaceLabel(this.div, text);
                             }
                         }
                     };
@@ -1056,11 +1648,7 @@ class TravelPlanner {
                     mapTypeId: google.maps.MapTypeId.ROADMAP
                 });
 
-                // 初始化服务
-                this.placesService = new google.maps.places.PlacesService(this.map);
-                this.geocoder = new google.maps.Geocoder();
-                this.directionsService = new google.maps.DirectionsService();
-                this.distanceMatrixService = new google.maps.DistanceMatrixService();
+                // Web Service 能力（Places/Geocoder/Directions/Matrix）仅由 PHP BFF 提供。
                 this.directionsRenderer = new google.maps.DirectionsRenderer({
                     draggable: false,
                     suppressMarkers: true // 不显示默认标记
@@ -1118,12 +1706,7 @@ class TravelPlanner {
                 this.isMapLoaded = true;
                 console.log('高德地图初始化成功');
 
-                // 移除API配置提示横幅（如果存在）
-                const banner = document.getElementById('api-config-banner');
-                if (banner) {
-                    document.body.removeChild(banner);
-                    document.body.style.paddingTop = '0';
-                }
+                this.removeApiConfigPrompt();
 
                 // 地图点击事件
                 this.map.on('click', (e) => {
@@ -1184,12 +1767,7 @@ class TravelPlanner {
                 this.isMapLoaded = true;
                 console.log('天地图初始化成功');
 
-                // 移除API配置提示横幅（如果存在）
-                const banner = document.getElementById('api-config-banner');
-                if (banner) {
-                    document.body.removeChild(banner);
-                    document.body.style.paddingTop = '0';
-                }
+                this.removeApiConfigPrompt();
 
                 // 地图点击事件
                 this.map.addEventListener('click', (e) => {
@@ -1234,9 +1812,7 @@ class TravelPlanner {
     // 计算初始地图配置（中心点和缩放级别）
     calculateInitialMapConfig() {
         // 获取当前有效地点（非待定且有坐标）
-        const activePlaces = this.travelList.filter(place =>
-            !place.isPending && place.lat && place.lng && !place.isBlank
-        );
+        const activePlaces = this.getUsablePlaces();
 
         if (activePlaces.length === 0) {
             // 没有地点时，显示中国的中心位置
@@ -1254,7 +1830,7 @@ class TravelPlanner {
             };
         } else {
             // 多个地点时，计算边界并居中
-            const bounds = this.calculateMapBounds();
+            const bounds = this.calculateMapBounds(activePlaces);
             console.log(`📍 ${activePlaces.length}个游玩地点，计算最佳视野`);
             return bounds || {
                 center: { lat: 35.0, lng: 105.0 },
@@ -1269,9 +1845,7 @@ class TravelPlanner {
 
         console.log('🎯 初始化地图内容：添加标记和绘制路线');
 
-        const activePlaces = this.travelList.filter(place =>
-            !place.isPending && !place.isBlank && place.lat && place.lng
-        );
+        const activePlaces = this.getUsablePlaces();
 
         // 重新创建所有标记（只为激活的地点）
         this.recreateMarkers();
@@ -1295,7 +1869,7 @@ class TravelPlanner {
     updateMapToCurrentScheme() {
         if (!this.isMapLoaded) return;
 
-        const activePlaces = this.travelList.filter(place => !place.isPending && place.lat && place.lng && !place.isBlank);
+        const activePlaces = this.getUsablePlaces();
 
         if (activePlaces.length === 0) {
             console.log('📍 没有有效地点，保持当前地图视野');
@@ -1304,11 +1878,8 @@ class TravelPlanner {
 
         console.log(`🗺️ 更新地图到当前方案，包含${activePlaces.length}个地点`);
 
-        // 清除现有标记和路线
-        this.clearMarkers();
-
-        // 重新添加标记
-        activePlaces.forEach(place => this.addMarker(place));
+        // 方案切换也按 ID diff overlay，保留新旧方案中未变化的地点。
+        this.syncMarkersIncremental();
 
         // 绘制路线
         if (activePlaces.length >= 2) {
@@ -1331,9 +1902,7 @@ class TravelPlanner {
         if (!this.isMapLoaded) return;
 
         // 获取所有有坐标的地点（游玩点和待定点）
-        const allPlacesWithCoords = this.travelList.filter(place =>
-            place.lat && place.lng && !place.isBlank
-        );
+        const allPlacesWithCoords = this.getUsablePlaces();
 
         if (allPlacesWithCoords.length === 0) {
             console.log('📍 没有有坐标的地点，无法调整地图视角');
@@ -1378,20 +1947,26 @@ class TravelPlanner {
         const selectedApiName = apiNameMap[selectedMapApi] || selectedMapApi;
 
         const mapContainer = document.getElementById('mapContainer');
-        mapContainer.innerHTML = `
-            <div style="height: 100%; display: flex; align-items: center; justify-content: center; background: #f0f0f0; color: #666; flex-direction: column;">
-                <h3>🗺️ 演示模式</h3>
-                <p>请在设置中配置${selectedApiName}API密钥以启用完整功能</p>
-                <p>目前可以使用搜索和列表功能</p>
-                <button onclick="app.showSettingsModal()" style="margin-top: 15px; padding: 10px 20px; background: #667eea; color: white; border: none; border-radius: 5px; cursor: pointer;">打开设置配置API</button>
-            </div>
-        `;
+        const demo = this.createElement('div', { className: 'demo-map-placeholder' });
+        demo.append(
+            this.createElement('h3', { text: '🗺️ 地图 SDK 未配置' }),
+            this.createElement('p', { text: `部署管理员尚未提供 ${selectedApiName} 的受限公共 SDK Key` }),
+            this.createElement('p', { text: '搜索、路线和列表仍由本站安全网关提供' })
+        );
+        const settingsButton = this.createElement('button', {
+            className: 'demo-map-settings-btn',
+            text: '打开地图设置',
+            type: 'button'
+        });
+        settingsButton.addEventListener('click', () => this.showSettingsModal());
+        demo.appendChild(settingsButton);
+        mapContainer.replaceChildren(demo);
         this.isMapLoaded = false;
     }
 
     // 显示API帮助信息
     showApiHelp() {
-        alert('获取Google地图API密钥的步骤：\\n\\n1. 访问 https://console.cloud.google.com/\\n2. 创建或选择一个项目\\n3. 启用以下API：\\n   - Maps JavaScript API\\n   - Places API\\n   - Geocoding API\\n4. 创建API密钥\\n5. 在HTML中替换"您的Google地图API密钥"\\n\\n注意：Google Maps API需要绑定信用卡，但有免费额度\\n\\n完成后刷新页面即可使用完整功能！');
+        alert('地图 JavaScript SDK 公共 Key 由部署管理员配置，必须绑定本站 HTTP Referrer，且只允许地图渲染 SDK。地点搜索、路线、距离矩阵和静态地图使用独立的服务端 Key，并仅通过 PHP BFF 调用。');
     }
 
     // 地图点击事件处理
@@ -1411,54 +1986,11 @@ class TravelPlanner {
 
     // 反向地理编码
     reverseGeocode(lng, lat, callback) {
-        const selectedMapApi = this.settings.selectedMapApi;
-
-        if (selectedMapApi === 'tianditu' && typeof T !== 'undefined' && T.Geocoder) {
-            try {
-                this.tiandituGeocoder = this.tiandituGeocoder || new T.Geocoder();
-                this.tiandituGeocoder.getLocation(new T.LngLat(lng, lat), (result) => {
-                    const address = result && typeof result.getAddress === 'function'
-                        ? result.getAddress()
-                        : '';
-                    const component = result && typeof result.getAddressComponent === 'function'
-                        ? result.getAddressComponent()
-                        : null;
-                    const poiName = component && component.poi ? component.poi : '';
-
-                    callback({
-                        name: poiName || address || '位置点',
-                        address: address || `${lng.toFixed(6)}, ${lat.toFixed(6)}`
-                    });
-                });
-            } catch (error) {
-                console.warn('天地图反向地理编码失败，使用坐标信息:', error);
-                callback({
-                    name: '位置点',
-                    address: `${lng.toFixed(6)}, ${lat.toFixed(6)}`
-                });
-            }
-        } else if (this.geocoder) {
-            this.geocoder.geocode({
-                location: { lat: lat, lng: lng }
-            }, (results, status) => {
-                if (status === 'OK' && results[0]) {
-                    callback({
-                        name: this.extractPlaceName(results[0]) || '位置点',
-                        address: results[0].formatted_address
-                    });
-                } else {
-                    callback({
-                        name: '位置点',
-                        address: `${lng.toFixed(6)}, ${lat.toFixed(6)}`
-                    });
-                }
-            });
-        } else {
-            callback({
-                name: '演示地点',
-                address: `经度: ${lng.toFixed(6)}, 纬度: ${lat.toFixed(6)}`
-            });
-        }
+        // v1 暂无反向地理编码能力；禁止借用 SDK Web Service 绕过 BFF。
+        callback({
+            name: '地图选点',
+            address: `经度: ${lng.toFixed(6)}, 纬度: ${lat.toFixed(6)}`
+        });
     }
 
     // 从地理编码结果提取地点名称
@@ -1494,456 +2026,189 @@ class TravelPlanner {
         return result.address_components[0]?.long_name || '位置点';
     }
 
-    // 搜索地点
+    getSearchContext(query = document.getElementById('searchInput')?.value || '') {
+        const locationBias = PlannerData.isValidCoordinate(this.currentLocation)
+            ? {
+                lat: this.currentLocation.lat,
+                lng: this.currentLocation.lng,
+                radiusMeters: PublicConfig.search?.locationBiasRadiusMeters || 10000
+            }
+            : null;
+        return {
+            provider: this.settings.selectedMapApi,
+            query,
+            language: PublicConfig.search?.language || document.documentElement.lang || navigator.language || 'zh-CN',
+            region: PublicConfig.search?.region || 'CN',
+            locationBias
+        };
+    }
+
     searchPlaces() {
-        const keyword = document.getElementById('searchInput').value.trim();
-        if (!keyword) return;
+        return this.submitSearch();
+    }
 
+    submitSearch() {
+        return this.searchController.submit(this.getSearchContext());
+    }
+
+    async fetchSearchResults(context, options = {}) {
+        const response = await this.bff.searchPlaces({ ...context, limit: 10 }, { signal: options.signal });
+        const payload = response?.data || response || {};
+        const rawPlaces = Array.isArray(payload.places) ? payload.places : [];
+        return rawPlaces.map(place => ({
+            id: this.normalizeUntrustedText(place.id, 200),
+            name: this.normalizeUntrustedText(place.name, 1000),
+            address: this.normalizeUntrustedText(place.address, 2000),
+            lat: Number(place.location?.lat ?? place.lat),
+            lng: Number(place.location?.lng ?? place.lng),
+            source: context.provider
+        })).filter(place => PlannerData.isValidCoordinate(place));
+    }
+
+    getDemoSearchResults(context) {
+        const keyword = Search.normalizeQuery(context.query);
+        return DEMO_SEARCH_PLACES
+            .filter(place => Search.normalizeQuery(`${place.name} ${place.address}`).includes(keyword))
+            .map(place => ({ ...place, source: 'demo' }));
+    }
+
+    renderSearchState(state) {
         const resultsContainer = document.getElementById('searchResults');
-        resultsContainer.innerHTML = '<div style="padding: 10px; text-align: center; color: #666;">搜索中...</div>';
+        const searchButton = document.getElementById('searchBtn');
+        if (!resultsContainer || !searchButton) return;
 
-        const selectedMapApi = this.settings.selectedMapApi;
-        console.log(`🔍 开始搜索 - API: ${selectedMapApi}, 关键字: ${keyword}`);
+        const isLoading = state.status === 'loading';
+        searchButton.disabled = isLoading;
+        searchButton.textContent = isLoading ? '⏳ 搜索中' : '搜索';
+        searchButton.setAttribute('aria-busy', String(isLoading));
+        resultsContainer.dataset.state = state.status;
+        resultsContainer.setAttribute('aria-busy', String(isLoading));
+        resultsContainer.setAttribute('aria-live', state.status === 'error' ? 'assertive' : 'polite');
 
-        // 详细的API状态检查
-        console.log('🔍 API状态检查:');
-        console.log('  - selectedMapApi:', selectedMapApi);
-        console.log('  - typeof AMap:', typeof AMap);
-        console.log('  - this.placesService:', !!this.placesService);
-        console.log('  - 高德API密钥:', this.getApiKey('gaode') ? '已配置' : '未配置');
-
-        if (selectedMapApi === 'google' && this.placesService) {
-            console.log('✅ 使用Google Places API搜索');
-            this.searchWithGoogle(keyword);
-        } else if (selectedMapApi === 'gaode') {
-            console.log('🗺️ 使用高德Web服务API搜索');
-            this.searchWithGaode(keyword);
-        } else if (selectedMapApi === 'tianditu') {
-            console.log('🗺️ 使用天地图搜索');
-            this.searchWithTianditu(keyword);
-        } else if (selectedMapApi === 'bing') {
-            console.log('🌐 使用Bing搜索（暂未实现）');
-            this.searchWithBing(keyword);
-        } else {
-            console.warn('⚠️ 当前地图API不支持搜索或未加载，使用演示模式');
-            console.warn('  原因：selectedMapApi =', selectedMapApi, ', this.placesService =', !!this.placesService);
-            this.searchDemo(keyword);
-        }
-    }
-
-    // 使用天地图API搜索
-    searchWithTianditu(keyword) {
-        if (!this.map || typeof T === 'undefined') {
-            console.warn('⚠️ 天地图尚未初始化完毕');
-            this.searchDemo(keyword);
+        if (state.status === 'idle') {
+            this.currentSearchResults = [];
+            resultsContainer.replaceChildren();
             return;
         }
-
-        const cachedResults = this.getCachedSearchResult(keyword);
-        if (cachedResults) {
-            this.displaySearchResults(cachedResults);
+        if (state.status === 'loading') {
+            this.currentSearchResults = [];
+            this.replaceWithMessage(resultsContainer, '正在搜索地点…', 'search-status search-status--loading');
             return;
         }
-
-        try {
-            const config = {
-                pageCapacity: 20,
-                onSearchComplete: (result) => {
-                    if (!result || typeof result.getResultType !== 'function') {
-                        console.error('⚠️ 天地图API返回空结果或异常:', result);
-                        const resultsContainer = document.getElementById('searchResults');
-                        resultsContainer.innerHTML = `<div style="padding: 10px; text-align: center; color: #ff4d4f;">未能获取到搜索结果，请稍后重试或更换关键词</div>`;
-                        return;
-                    }
-
-                    const results = [];
-                    const resultType = parseInt(result.getResultType());
-
-                    const appendResult = (item, fallbackAddress = '无详细地址') => {
-                        if (!item || !item.lonlat) return;
-
-                        const lonlat = String(item.lonlat).trim().split(/[\s,]+/);
-                        const lng = Number(lonlat[0]);
-                        const lat = Number(lonlat[1]);
-                        if (!Number.isFinite(lng) || !Number.isFinite(lat)) return;
-
-                        results.push({
-                            name: item.name || item.adminName || keyword,
-                            address: item.address || item.phone || fallbackAddress,
-                            lng,
-                            lat,
-                            source: 'tianditu',
-                            id: item.hotPointID || item.adminCode || `tianditu_${Date.now()}_${results.length}`
-                        });
-                    };
-
-                    if (resultType === 1) { // POI
-                        const pois = result.getPois() || [];
-                        pois.forEach(poi => appendResult(poi));
-                    } else if (resultType === 3) { // Administrative area
-                        const area = result.getArea ? result.getArea() : null;
-                        (Array.isArray(area) ? area : [area]).forEach(item => appendResult(item, '行政区域'));
-                    } else if (resultType === 2) { // Statistics / recommended administrative areas
-                        const statistics = result.getStatistics ? result.getStatistics() : null;
-                        (Array.isArray(statistics) ? statistics : [statistics]).filter(Boolean).forEach(item => {
-                            const adminItems = [
-                                ...(Array.isArray(item.priorityCitys) ? item.priorityCitys : []),
-                                ...(Array.isArray(item.allAdmins) ? item.allAdmins : [])
-                            ];
-                            adminItems.forEach(admin => appendResult(admin, '行政区域'));
-                        });
-                    }
-
-                    if (results.length > 0) {
-                        this.cacheSearchResult(keyword, results);
-                        this.displaySearchResults(results);
-                    } else {
-                        console.log('Tianditu unhandled response type:', resultType, result);
-                        const resultsContainer = document.getElementById('searchResults');
-                        resultsContainer.innerHTML = `<div style="padding: 10px; text-align: center; color: #666; font-size: 12px;">未找到匹配的地点<br>请尝试其他关键词</div>`;
-                    }
-                }
+        if (state.status === 'empty') {
+            this.currentSearchResults = [];
+            this.replaceWithMessage(resultsContainer, '未找到相关地点', 'search-status search-status--empty');
+            return;
+        }
+        if (state.status === 'configuration-required') {
+            this.currentSearchResults = [];
+            const panel = this.createElement('div', { className: 'search-status search-status--configuration' });
+            const message = state.reason === 'unsupported'
+                ? '当前地图 Provider 不支持地点搜索，请切换服务。'
+                : '当前地图 Provider 尚未配置地点搜索 Key。';
+            panel.append(
+                this.createElement('p', { text: message }),
+                this.createElement('button', {
+                    className: 'search-configure-btn',
+                    text: '打开地图服务设置',
+                    type: 'button',
+                    dataset: { searchAction: 'configure' }
+                })
+            );
+            resultsContainer.replaceChildren(panel);
+            return;
+        }
+        if (state.status === 'error') {
+            this.currentSearchResults = [];
+            const messages = {
+                key: 'Provider Key 无效或权限不足，请联系管理员检查配置。',
+                quota: '地点搜索配额不足或请求过于频繁，请稍后再试。',
+                timeout: '地点搜索超时，请重试。',
+                network: navigator.onLine === false ? '当前处于离线状态，请恢复网络后重试。' : '网络连接失败，请检查网络后重试。',
+                unknown: '地点服务暂时不可用，请稍后重试。'
             };
-
-            const localSearch = new T.LocalSearch(this.map, config);
-            localSearch.search(keyword);
-        } catch (error) {
-            console.error('天地图搜索出错:', error);
-            const resultsContainer = document.getElementById('searchResults');
-            resultsContainer.innerHTML = '<div style="padding: 10px; text-align: center; color: #ff4d4f;">搜索请求失败，请稍后重试</div>';
-        }
-    }
-
-    // 使用Google Places API搜索
-    searchWithGoogle(keyword) {
-        const request = {
-            query: keyword,
-            fields: ['place_id', 'name', 'formatted_address', 'geometry']
-        };
-
-        this.placesService.textSearch(request, (results, status) => {
-            if (status === google.maps.places.PlacesServiceStatus.OK && results.length > 0) {
-                const places = results.slice(0, 10).map(place => ({
-                    name: place.name,
-                    address: place.formatted_address,
-                    lng: place.geometry.location.lng(),
-                    lat: place.geometry.location.lat()
-                }));
-                this.displaySearchResults(places);
-            } else {
-                this.displaySearchResults([]);
-            }
-        });
-    }
-
-    // 使用高德地图Web服务API搜索
-    searchWithGaode(keyword) {
-        console.log('🗺️ 使用高德地图Web服务API搜索...', keyword);
-
-        // 检查API密钥
-        const apiKey = this.getApiKey('gaode');
-        console.log('🔑 高德API密钥状态:', apiKey ? '已配置' : '❌ 未配置');
-
-        if (!apiKey) {
-            console.error('❌ 高德地图API密钥未配置，无法进行搜索');
-            this.displaySearchResults([]);
+            this.replaceWithMessage(resultsContainer, messages[state.reason] || messages.unknown, 'search-status search-status--error');
             return;
         }
-
-        // 使用Web服务API进行搜索
-        this.searchWithGaodeWebAPI(keyword, apiKey);
-    }
-
-    // 使用高德Web服务API进行搜索（带缓存优化）
-    async searchWithGaodeWebAPI(keyword, apiKey) {
-        try {
-            // 检查缓存
-            const cachedResults = this.getCachedSearchResult(keyword);
-            if (cachedResults) {
-                this.displaySearchResults(cachedResults);
-                return;
-            }
-
-            console.log('🌐 调用高德Web服务API...');
-
-            // 构建请求URL
-            const searchUrl = 'https://restapi.amap.com/v3/place/text';
-            const params = new URLSearchParams({
-                key: apiKey,
-                keywords: keyword,
-                offset: '10',  // 返回结果数量
-                page: '1',     // 页码
-                extensions: 'all'  // 返回详细信息
+        if (state.status === 'demo') {
+            const banner = this.createElement('div', {
+                className: 'search-status search-status--demo',
+                text: '当前 Provider 未配置，以下为演示数据，不会发起第三方搜索。'
             });
-
-            const requestUrl = `${searchUrl}?${params.toString()}`;
-            console.log('🔗 请求URL:', requestUrl);
-
-            // 发送请求
-            const response = await fetch(requestUrl);
-            console.log('📡 HTTP响应状态:', response.status, response.statusText);
-
-            if (!response.ok) {
-                throw new Error(`HTTP错误: ${response.status} ${response.statusText}`);
-            }
-
-            const data = await response.json();
-            console.log('📦 API响应数据:', data);
-
-            // 处理响应
-            if (data.status === '1') {
-                console.log('✅ 搜索成功');
-
-                if (data.pois && data.pois.length > 0) {
-                    console.log('✅ 找到POI数据，数量:', data.pois.length);
-
-                    const places = data.pois.map((poi, index) => {
-                        console.log(`🔍 处理POI ${index + 1}:`, poi);
-
-                        // 构建完整地址
-                        let address = '';
-                        if (poi.pname) address += poi.pname;
-                        if (poi.cityname) address += poi.cityname;
-                        if (poi.adname) address += poi.adname;
-                        if (poi.address) address += poi.address;
-
-                        // 解析坐标（Web服务API返回的是字符串格式："lng,lat"）
-                        const [lng, lat] = poi.location.split(',').map(Number);
-
-                        const place = {
-                            name: poi.name || '未知地点',
-                            address: address || '地址未知',
-                            lng: lng || 0,
-                            lat: lat || 0
-                        };
-
-                        console.log(`🔍 转换后的地点 ${index + 1}:`, place);
-                        return place;
-                    }).filter(place => place.lng && place.lat);
-
-                    console.log('✅ 最终结果数量:', places.length);
-
-                    // 缓存搜索结果
-                    this.cacheSearchResult(keyword, places);
-
-                    this.displaySearchResults(places);
-                } else {
-                    console.log('📭 搜索成功但无结果');
-                    this.displaySearchResults([]);
-                }
-            } else {
-                console.error('❌ API返回错误:', data.info || '未知错误');
-                console.error('❌ 错误代码:', data.infocode);
-                this.displaySearchResults([]);
-            }
-
-        } catch (error) {
-            console.error('❌ 调用高德Web服务API时出错:', error);
-            console.error('❌ 错误堆栈:', error.stack);
-
-            // 检查是否是跨域问题
-            if (error.message.includes('CORS') || error.message.includes('network')) {
-                console.warn('⚠️ 可能遇到跨域问题，尝试使用JSONP方式...');
-                this.searchWithGaodeJSONP(keyword, apiKey);
-            } else {
-                this.displaySearchResults([]);
-            }
+            const fragment = this.renderSearchResultItems(state.results, true);
+            resultsContainer.replaceChildren(banner, fragment);
+            return;
         }
+        this.renderSearchResults(state.results);
     }
 
-    // 使用JSONP方式调用高德API（解决跨域问题）
-    searchWithGaodeJSONP(keyword, apiKey) {
-        console.log('🔄 使用JSONP方式调用高德API...');
+    renderSearchResultItems(results, isDemo = false) {
+        this.currentSearchResults = results
+            .filter(place => PlannerData.isValidCoordinate(place))
+            .map(place => ({
+                name: String(place.name ?? ''),
+                address: String(place.address ?? ''),
+                lng: Number(place.lng),
+                lat: Number(place.lat),
+                source: String(place.source || '')
+            }));
 
-        const callbackName = `gaodeCallback_${Date.now()}`;
-
-        // 创建全局回调函数
-        window[callbackName] = (data) => {
-            console.log('📦 JSONP响应数据:', data);
-
-            try {
-                if (data.status === '1') {
-                    if (data.pois && data.pois.length > 0) {
-                        const places = data.pois.map(poi => {
-                            const [lng, lat] = poi.location.split(',').map(Number);
-                            return {
-                                name: poi.name || '未知地点',
-                                address: (poi.pname || '') + (poi.cityname || '') + (poi.adname || '') + (poi.address || '') || '地址未知',
-                                lng: lng || 0,
-                                lat: lat || 0
-                            };
-                        }).filter(place => place.lng && place.lat);
-
-                        console.log('✅ JSONP搜索成功，结果数量:', places.length);
-                        this.displaySearchResults(places);
-                    } else {
-                        console.log('📭 JSONP搜索成功但无结果');
-                        this.displaySearchResults([]);
-                    }
-                } else {
-                    console.error('❌ JSONP API返回错误:', data.info);
-                    this.displaySearchResults([]);
-                }
-            } catch (error) {
-                console.error('❌ 处理JSONP响应时出错:', error);
-                this.displaySearchResults([]);
-            } finally {
-                // 清理
-                delete window[callbackName];
-                document.head.removeChild(script);
-            }
-        };
-
-        // 创建script标签
-        const script = document.createElement('script');
-        const params = new URLSearchParams({
-            key: apiKey,
-            keywords: keyword,
-            offset: '10',
-            page: '1',
-            extensions: 'all',
-            callback: callbackName
+        const fragment = document.createDocumentFragment();
+        this.currentSearchResults.forEach((place, index) => {
+            const item = this.createElement('button', {
+                className: 'search-result-item',
+                type: 'button',
+                dataset: { resultIndex: index }
+            });
+            item.append(
+                this.createElement('span', { className: 'search-result-name', text: place.name }),
+                this.createElement('span', { className: 'search-result-address', text: place.address }),
+                ...(isDemo ? [this.createElement('span', { className: 'search-result-demo-badge', text: '演示' })] : [])
+            );
+            fragment.appendChild(item);
         });
-
-        script.src = `https://restapi.amap.com/v3/place/text?${params.toString()}`;
-        script.onerror = () => {
-            console.error('❌ JSONP请求失败');
-            delete window[callbackName];
-            document.head.removeChild(script);
-            this.displaySearchResults([]);
-        };
-
-        document.head.appendChild(script);
+        return fragment;
     }
 
-    // 测试高德地图Web服务API是否正常工作
-    async testGaodeAPI() {
-        console.log('🧪 === 测试高德地图Web服务API ===');
-
-        const apiKey = this.getApiKey('gaode');
-        if (!apiKey) {
-            console.error('❌ 高德API密钥未配置');
-            return false;
-        }
-
-        console.log('🔑 API密钥状态: 已配置');
-
-        try {
-            const testUrl = `https://restapi.amap.com/v3/place/text?key=${apiKey}&keywords=北京&offset=1`;
-            console.log('🔗 测试URL:', testUrl);
-
-            const response = await fetch(testUrl);
-            console.log('📡 HTTP状态:', response.status);
-
-            const data = await response.json();
-            console.log('📦 测试响应:', data);
-
-            if (data.status === '1') {
-                console.log('✅ 高德Web服务API测试成功！');
-                return true;
-            } else {
-                console.error('❌ API返回错误:', data.info);
-                return false;
-            }
-        } catch (error) {
-            console.error('❌ 测试API时出错:', error);
-
-            // 如果fetch失败，尝试JSONP测试
-            console.log('🔄 尝试JSONP测试...');
-            return this.testGaodeAPIWithJSONP(apiKey);
-        }
+    renderSearchResults(results) {
+        const resultsContainer = document.getElementById('searchResults');
+        resultsContainer.replaceChildren(this.renderSearchResultItems(results));
     }
 
-    // 使用JSONP测试高德API
-    testGaodeAPIWithJSONP(apiKey) {
-        return new Promise((resolve) => {
-            const callbackName = `testCallback_${Date.now()}`;
-
-            window[callbackName] = (data) => {
-                console.log('📦 JSONP测试响应:', data);
-
-                if (data.status === '1') {
-                    console.log('✅ 高德Web服务API (JSONP) 测试成功！');
-                    resolve(true);
-                } else {
-                    console.error('❌ JSONP API返回错误:', data.info);
-                    resolve(false);
-                }
-
-                // 清理
-                delete window[callbackName];
-                document.head.removeChild(script);
-            };
-
-            const script = document.createElement('script');
-            script.src = `https://restapi.amap.com/v3/place/text?key=${apiKey}&keywords=北京&offset=1&callback=${callbackName}`;
-            script.onerror = () => {
-                console.error('❌ JSONP测试失败');
-                delete window[callbackName];
-                document.head.removeChild(script);
-                resolve(false);
-            };
-
-            document.head.appendChild(script);
-        });
-    }
-
-    // 使用Bing地图搜索（暂未实现）
-    searchWithBing(keyword) {
-        console.log('🌐 Bing地图搜索暂未实现，使用演示模式');
-        this.searchDemo(keyword);
-    }
-
-    // 演示搜索功能
-    searchDemo(keyword) {
-        console.log('🎭 使用演示搜索模式');
-        // 模拟真实的搜索结果
-        const demoResults = [
-            { name: `${keyword}博物馆`, address: '北京市东城区王府井大街1号', lng: 116.397428, lat: 39.90923 },
-            { name: `${keyword}公园`, address: '北京市朝阳区朝阳路88号', lng: 116.407428, lat: 39.91923 },
-            { name: `${keyword}购物中心`, address: '北京市海淀区中关村大街2号', lng: 116.387428, lat: 39.89923 },
-            { name: `${keyword}美食街`, address: '北京市西城区德胜门内大街102号', lng: 116.377428, lat: 39.88923 },
-            { name: `${keyword}艺术馆`, address: '北京市丰台区南四环西路188号', lng: 116.367428, lat: 39.87923 }
-        ];
-
-        setTimeout(() => {
-            this.displaySearchResults(demoResults);
-        }, 500);
-    }
-
-    // 显示搜索结果
     displaySearchResults(results) {
-        const resultsContainer = document.getElementById('searchResults');
+        this.renderSearchState({ status: results.length ? 'success' : 'empty', results });
+    }
 
-        if (results.length === 0) {
-            resultsContainer.innerHTML = '<div style="padding: 10px; text-align: center; color: #666;">未找到相关地点</div>';
-            return;
-        }
+    clearSearchResults() {
+        this.searchController.reset();
+    }
 
-        resultsContainer.innerHTML = results.map(place => `
-            <div class="search-result-item" data-lng="${place.lng}" data-lat="${place.lat}" data-name="${place.name}" data-address="${place.address}">
-                <div class="search-result-name">${place.name}</div>
-                <div class="search-result-address">${place.address}</div>
-            </div>
-        `).join('');
+    resetSearch() {
+        const searchInput = document.getElementById('searchInput');
+        if (searchInput) searchInput.value = '';
+        this.searchController.reset();
+        searchInput?.focus();
+    }
 
-        // 添加点击事件
-        resultsContainer.querySelectorAll('.search-result-item').forEach(item => {
-            item.addEventListener('click', () => {
-                const placeData = {
-                    name: item.dataset.name,
-                    address: item.dataset.address,
-                    lng: parseFloat(item.dataset.lng),
-                    lat: parseFloat(item.dataset.lat)
-                };
+    searchWithBff(keyword) {
+        return this.searchController.submit(this.getSearchContext(keyword));
+    }
 
-                this.showPlaceModal(placeData);
-                if (this.isMapLoaded) {
-                    this.map.setCenter({ lat: placeData.lat, lng: placeData.lng });
-                    this.map.setZoom(15);
-                }
-            });
-        });
+    searchWithTianditu(keyword) { return this.searchWithBff(keyword); }
+    searchWithGoogle(keyword) { return this.searchWithBff(keyword); }
+    searchWithGaode(keyword) { return this.searchWithBff(keyword); }
+    searchWithGaodeWebAPI(keyword) { return this.searchWithBff(keyword); }
+    searchWithGaodeJSONP(keyword) { return this.searchWithBff(keyword); }
+    searchWithBing(keyword) { return this.searchWithBff(keyword); }
+    searchDemo(keyword) { return this.getDemoSearchResults(this.getSearchContext(keyword)); }
+
+    async testGaodeAPI() {
+        const state = await this.searchWithBff('北京');
+        return ['success', 'empty'].includes(state.status);
+    }
+
+    testGaodeAPIWithJSONP() {
+        return this.testGaodeAPI();
     }
 
     // 显示地点详情模态框
@@ -1951,30 +2216,56 @@ class TravelPlanner {
         this.currentPlace = place;
         document.getElementById('placeName').textContent = place.name;
         document.getElementById('placeAddress').textContent = place.address;
-        document.getElementById('placeModal').style.display = 'block';
+        this.dialogManager.open('placeModal', {
+            initialFocus: '#addToListBtn',
+            onRequestClose: () => this.closeModal()
+        });
     }
 
     // 关闭模态框
     closeModal() {
-        document.getElementById('placeModal').style.display = 'none';
+        this.dialogManager.close('placeModal');
     }
 
     // 显示储存方案模态框
     showSaveSchemeModal() {
-        document.getElementById('saveSchemeModal').style.display = 'block';
         this.loadSavedSchemes();
         document.getElementById('schemeNameInput').value = '';
 
         // 重置警告信息和按钮状态
-        document.getElementById('schemeNameWarning').style.display = 'none';
+        document.getElementById('schemeNameWarning').hidden = true;
         document.getElementById('saveNewSchemeBtn').disabled = true;
+        this.dialogManager.open('saveSchemeModal', {
+            initialFocus: '#schemeNameInput',
+            onRequestClose: () => this.closeSaveSchemeModal()
+        });
+    }
 
-        document.getElementById('schemeNameInput').focus();
+    createBlankScheme() {
+        if (this.hasUnsavedChanges && this.travelList.length > 0 && !confirm(
+            '当前方案有未保存的更改。新建空白方案会清空当前编辑内容，是否继续？'
+        )) {
+            return;
+        }
+
+        this.dispatch({
+            type: 'REPLACE_PLAN',
+            travelList: [],
+            routeSegments: [],
+            currentSchemeId: null,
+            currentSchemeName: null,
+            hasUnsavedChanges: false,
+            markModified: false
+        });
+        this.updatePageTitle();
+        this.updateTogglePendingButton();
+        this.showSaveSchemeModal();
+        this.showToast('已新建空白方案，请输入名称后保存');
     }
 
     // 关闭储存方案模态框
     closeSaveSchemeModal() {
-        document.getElementById('saveSchemeModal').style.display = 'none';
+        this.dialogManager.close('saveSchemeModal');
     }
 
     // 显示导出模态框
@@ -1983,17 +2274,23 @@ class TravelPlanner {
             this.showToast('请先添加一些游玩地点再导出');
             return;
         }
-        document.getElementById('exportModal').style.display = 'block';
+        this.dialogManager.open('exportModal', {
+            initialFocus: '.share-export',
+            onRequestClose: () => this.closeExportModal()
+        });
     }
 
     // 显示导入模态框
     showImportModal() {
-        document.getElementById('importModal').style.display = 'block';
+        this.dialogManager.open('importModal', {
+            initialFocus: '#selectFileBtn',
+            onRequestClose: () => this.closeImportModal()
+        });
     }
 
     // 关闭导入模态框
     closeImportModal() {
-        document.getElementById('importModal').style.display = 'none';
+        this.dialogManager.close('importModal');
         // 重置文件输入
         document.getElementById('fileInput').value = '';
         document.getElementById('fileDropZone').classList.remove('dragover');
@@ -2001,47 +2298,51 @@ class TravelPlanner {
 
     // 关闭导出模态框
     closeExportModal() {
-        document.getElementById('exportModal').style.display = 'none';
+        this.dialogManager.close('exportModal');
     }
 
     // 显示设置模态框
     showSettingsModal() {
         // 加载当前设置到界面
         this.loadSettingsToUI();
-        document.getElementById('settingsModal').style.display = 'block';
+        this.dialogManager.open('settingsModal', {
+            initialFocus: '[role="tab"][aria-selected="true"]',
+            onRequestClose: () => this.closeSettingsModal()
+        });
     }
 
     // 关闭设置模态框
     closeSettingsModal() {
-        document.getElementById('settingsModal').style.display = 'none';
+        this.dialogManager.close('settingsModal');
     }
 
     // 加载设置到界面
     loadSettingsToUI() {
         // 加载地图API选择
-        const mapApiRadioButton = document.querySelector(`input[name="selectedMapApi"][value="${this.settings.selectedMapApi}"]`);
-        if (mapApiRadioButton) {
-            mapApiRadioButton.checked = true;
-        }
+        document.querySelectorAll('input[name="selectedMapApi"]').forEach(radio => {
+            radio.checked = radio.value === this.settings.selectedMapApi;
+        });
 
         // 加载导航应用选择
-        const radioButton = document.querySelector(`input[name="navigationApp"][value="${this.settings.navigationApp}"]`);
-        if (radioButton) {
-            radioButton.checked = true;
-        }
+        document.querySelectorAll('input[name="navigationApp"]').forEach(radio => {
+            radio.checked = radio.value === this.settings.navigationApp;
+        });
 
-        // 加载API密钥
-        if (this.settings.apiKeys) {
-            const googleInput = document.getElementById('googleApiKeyInput');
-            const gaodeInput = document.getElementById('gaodeApiKeyInput');
-            const bingInput = document.getElementById('bingApiKeyInput');
-            const tiandituInput = document.getElementById('tiandituApiKeyInput');
-
-            if (googleInput) googleInput.value = this.settings.apiKeys.google || '';
-            if (gaodeInput) gaodeInput.value = this.settings.apiKeys.gaode || '';
-            if (bingInput) bingInput.value = this.settings.apiKeys.bing || '';
-            if (tiandituInput) tiandituInput.value = this.settings.apiKeys.tianditu || '';
+        const byokToggle = document.getElementById('advancedByokEnabled');
+        const byokKeys = this.readAdvancedByokKeys();
+        if (byokToggle) {
+            byokToggle.disabled = PublicConfig.allowAdvancedByok !== true;
+            byokToggle.checked = PublicConfig.allowAdvancedByok === true && this.settings.advancedByokEnabled === true;
         }
+        const byokInputs = {
+            gaode: document.getElementById('gaodeSdkPublicKeyInput'),
+            google: document.getElementById('googleSdkPublicKeyInput'),
+            tianditu: document.getElementById('tiandituSdkPublicKeyInput')
+        };
+        Object.entries(byokInputs).forEach(([provider, input]) => {
+            if (input) input.value = byokKeys[provider] || '';
+        });
+        this.updateAdvancedByokVisibility();
 
         // 加载导航偏好设置
         if (this.settings.preferences) {
@@ -2067,9 +2368,8 @@ class TravelPlanner {
 
     // 保存设置
     saveSettings() {
-        // 在更新设置之前，先记录当前的API密钥和地图API选择
         const currentSelectedMapApi = this.settings.selectedMapApi;
-        const currentSelectedApiKey = this.getApiKey(currentSelectedMapApi);
+        const currentSelectedApiKey = this.getPublicSdkKey(currentSelectedMapApi);
 
         // 保存地图API选择设置
         const selectedMapApi = document.querySelector('input[name="selectedMapApi"]:checked');
@@ -2083,20 +2383,17 @@ class TravelPlanner {
             this.settings.navigationApp = selectedApp.value;
         }
 
-        // 保存API密钥
-        const googleInput = document.getElementById('googleApiKeyInput');
-        const gaodeInput = document.getElementById('gaodeApiKeyInput');
-        const bingInput = document.getElementById('bingApiKeyInput');
-        const tiandituInput = document.getElementById('tiandituApiKeyInput');
-
-        if (!this.settings.apiKeys) {
-            this.settings.apiKeys = {};
+        const byokToggle = document.getElementById('advancedByokEnabled');
+        this.settings.advancedByokEnabled = PublicConfig.allowAdvancedByok === true && byokToggle?.checked === true;
+        if (this.settings.advancedByokEnabled) {
+            this.writeAdvancedByokKeys({
+                gaode: document.getElementById('gaodeSdkPublicKeyInput')?.value.trim() || '',
+                google: document.getElementById('googleSdkPublicKeyInput')?.value.trim() || '',
+                tianditu: document.getElementById('tiandituSdkPublicKeyInput')?.value.trim() || ''
+            });
+        } else {
+            sessionStorage.removeItem('travelPlannerAdvancedByok');
         }
-
-        if (googleInput) this.settings.apiKeys.google = googleInput.value.trim();
-        if (gaodeInput) this.settings.apiKeys.gaode = gaodeInput.value.trim();
-        if (bingInput) this.settings.apiKeys.bing = bingInput.value.trim();
-        if (tiandituInput) this.settings.apiKeys.tianditu = tiandituInput.value.trim();
 
         // 保存导航偏好设置
         const openInNewTabCheckbox = document.getElementById('openInNewTab');
@@ -2126,7 +2423,15 @@ class TravelPlanner {
 
         // 检查地图API相关变化
         const newSelectedMapApi = this.settings.selectedMapApi;
-        const newSelectedApiKey = this.getApiKey(newSelectedMapApi);
+        const newSelectedApiKey = this.getPublicSdkKey(newSelectedMapApi);
+        if (newSelectedMapApi !== currentSelectedMapApi) {
+            // Provider 是搜索上下文的一部分。立即取消旧 Provider 的请求，
+            // 即使稍后因地图 SDK 变化而刷新页面，旧结果也不能重新出现。
+            this.searchController.contextChanged();
+            this.taskGenerations.begin('distance');
+            this.taskGenerations.begin('route');
+            this.routeResultSignature = '';
+        }
         const isSelectedMapApiLoaded = () => {
             switch (newSelectedMapApi) {
                 case 'google':
@@ -2135,8 +2440,8 @@ class TravelPlanner {
                     return typeof AMap !== 'undefined';
                 case 'tianditu':
                     return typeof T !== 'undefined' && T.Map;
-                case 'bing':
-                    return typeof Microsoft !== 'undefined';
+                case 'azure':
+                    return false;
                 default:
                     return false;
             }
@@ -2166,65 +2471,82 @@ class TravelPlanner {
         this.closeSettingsModal();
     }
 
-    // 获取API密钥
-    getApiKey(provider) {
-        console.log(`🔍 获取API密钥 - 提供商: ${provider}`);
+    updateAdvancedByokVisibility() {
+        const toggle = document.getElementById('advancedByokEnabled');
+        const fields = document.getElementById('advancedByokFields');
+        if (!fields) return;
+        fields.hidden = !(PublicConfig.allowAdvancedByok === true && toggle?.checked === true);
+    }
 
-        if (!this.settings.apiKeys) {
-            console.log('❌ 没有apiKeys配置');
-            return null;
+    readAdvancedByokKeys() {
+        if (PublicConfig.allowAdvancedByok !== true) return {};
+        try {
+            const value = JSON.parse(sessionStorage.getItem('travelPlannerAdvancedByok') || '{}');
+            return value && typeof value === 'object' ? value : {};
+        } catch (error) {
+            sessionStorage.removeItem('travelPlannerAdvancedByok');
+            return {};
         }
+    }
 
-        let apiKey = null;
-        switch (provider) {
-            case 'google':
-                apiKey = this.settings.apiKeys.google || null;
-                break;
-            case 'gaode':
-                apiKey = this.settings.apiKeys.gaode || null;
-                break;
-            case 'tianditu':
-                apiKey = this.settings.apiKeys.tianditu || null;
-                break;
-            case 'bing':
-                apiKey = this.settings.apiKeys.bing || null;
-                break;
-            default:
-                apiKey = null;
+    writeAdvancedByokKeys(keys) {
+        if (PublicConfig.allowAdvancedByok !== true) return;
+        const clean = {};
+        ['gaode', 'google', 'tianditu'].forEach(provider => {
+            clean[provider] = String(keys?.[provider] || '').replace(/[\u0000-\u001F\u007F]/g, '').slice(0, 200);
+        });
+        sessionStorage.setItem('travelPlannerAdvancedByok', JSON.stringify(clean));
+    }
+
+    // 仅用于加载地图渲染 SDK；Web Service 凭据不存在于浏览器数据模型中。
+    getPublicSdkKey(provider) {
+        const normalizedProvider = String(provider || '');
+        if (!ClientSecurity.PROVIDERS.includes(normalizedProvider)) return null;
+        if (PublicConfig.allowAdvancedByok === true && this.settings.advancedByokEnabled === true) {
+            const byok = this.readAdvancedByokKeys()[normalizedProvider];
+            if (byok) return byok;
         }
-
-        console.log(`🔑 ${provider} API密钥: ${apiKey ? '已配置' : '未配置'}`);
-        return apiKey;
+        const configured = PublicConfig.sdkPublicKeys?.[normalizedProvider];
+        return configured ? String(configured) : null;
     }
 
     // 设置菜单切换功能
     setupSettingsMenuToggle() {
-        const menuItems = document.querySelectorAll('.settings-menu-item');
-
-        menuItems.forEach(item => {
-            item.addEventListener('click', () => {
-                // 移除所有活动状态
-                menuItems.forEach(i => i.classList.remove('active'));
-                document.querySelectorAll('.settings-panel').forEach(panel => {
-                    panel.classList.remove('active');
-                });
-
-                // 激活当前菜单项
-                item.classList.add('active');
-
-                // 显示对应面板
-                const panelId = item.dataset.panel + 'Panel';
-                const targetPanel = document.getElementById(panelId);
-                if (targetPanel) {
-                    targetPanel.classList.add('active');
-                }
-
-                // 如果切换到版本详情面板，更新版本信息
-                if (item.dataset.panel === 'version') {
-                    this.updateVersionInfo();
-                }
+        const tablist = document.querySelector('.settings-menu[role="tablist"]');
+        if (!tablist) return;
+        const tabs = Array.from(tablist.querySelectorAll('[role="tab"]'));
+        tabs.forEach(tab => {
+            tab.addEventListener('click', () => this.activateSettingsTab(tab));
+            tab.addEventListener('keydown', event => {
+                const currentIndex = tabs.indexOf(tab);
+                let nextIndex = null;
+                if (['ArrowDown', 'ArrowRight'].includes(event.key)) nextIndex = (currentIndex + 1) % tabs.length;
+                if (['ArrowUp', 'ArrowLeft'].includes(event.key)) nextIndex = (currentIndex - 1 + tabs.length) % tabs.length;
+                if (event.key === 'Home') nextIndex = 0;
+                if (event.key === 'End') nextIndex = tabs.length - 1;
+                if (nextIndex === null) return;
+                event.preventDefault();
+                this.activateSettingsTab(tabs[nextIndex], { focus: true });
             });
         });
+    }
+
+    activateSettingsTab(activeTab, options = {}) {
+        const tabs = Array.from(document.querySelectorAll('.settings-menu [role="tab"]'));
+        const panels = Array.from(document.querySelectorAll('.settings-panel[role="tabpanel"]'));
+        tabs.forEach(tab => {
+            const selected = tab === activeTab;
+            tab.classList.toggle('active', selected);
+            tab.setAttribute('aria-selected', String(selected));
+            tab.tabIndex = selected ? 0 : -1;
+        });
+        panels.forEach(panel => {
+            const selected = panel.id === activeTab.getAttribute('aria-controls');
+            panel.classList.toggle('active', selected);
+            panel.hidden = !selected;
+        });
+        if (activeTab.dataset.panel === 'version') this.updateVersionInfo();
+        if (options.focus) activeTab.focus();
     }
 
     // 获取当前版本号
@@ -2254,43 +2576,31 @@ class TravelPlanner {
         // 更新版本历史列表
         const versionListElement = document.querySelector('.version-list');
         if (versionListElement) {
-            let html = '';
-            let currentVersion = '';
-            let versionItems = [];
-
-            versionHistory.forEach((item, index) => {
+            const groupedVersions = [];
+            versionHistory.forEach(item => {
                 const changeTypeClass = item.type === 'feature' ? 'feature' :
                     item.type === 'fix' ? 'fix' : 'optimize';
                 const changeTypeText = item.type === 'feature' ? '新增' :
                     item.type === 'fix' ? '修复' : '优化';
 
-                // 统一处理：收集同一版本的所有更新项
-                if (currentVersion !== item.version) {
-                    // 如果之前有版本项目，先输出它们
-                    if (versionItems.length > 0) {
-                        html += this.generateVersionHtml(currentVersion, versionItems);
-                        versionItems = [];
-                    }
-                    currentVersion = item.version;
+                let group = groupedVersions[groupedVersions.length - 1];
+                if (!group || group.version !== item.version) {
+                    group = { version: item.version, items: [] };
+                    groupedVersions.push(group);
                 }
-
-                versionItems.push({
+                group.items.push({
                     type: item.type,
                     text: item.text,
                     changeTypeClass: changeTypeClass,
                     changeTypeText: changeTypeText
                 });
-
-                // 如果这是最后一项，或者下一项是不同版本
-                const nextItem = versionHistory[index + 1];
-                if (!nextItem || nextItem.version !== item.version) {
-                    html += this.generateVersionHtml(currentVersion, versionItems);
-                    versionItems = [];
-                    currentVersion = '';
-                }
             });
 
-            versionListElement.innerHTML = html;
+            const fragment = document.createDocumentFragment();
+            groupedVersions.forEach(group => {
+                fragment.appendChild(this.generateVersionHtml(group.version, group.items));
+            });
+            versionListElement.replaceChildren(fragment);
         }
     }
 
@@ -2469,6 +2779,22 @@ class TravelPlanner {
                     { message: '移除地图初始化前的固定等待时间，页面就绪后立即加载地图SDK', type: 'optimize' },
                     { message: '根据所选地图服务提前建立网络连接，缩短地图首次出现时间', type: 'optimize' }
                 ]
+            },
+            // 1.15.1
+            {
+                updates: [
+                    { message: '增加搜索重置按钮，可一键清空搜索内容和结果', type: 'optimize' },
+                    { message: '增强天地图路线对比度，使用深色描边和高亮主线凸显路线', type: 'optimize' },
+                    { message: '重置搜索时忽略尚未返回的旧请求，避免结果再次出现', type: 'fix' }
+                ]
+            },
+            // 1.16.0
+            {
+                updates: [
+                    { message: '完成P0级XSS治理，移除主页面HTML字符串注入和内联事件处理器', type: 'feature' },
+                    { message: '新增地图SDK统一安全渲染器与分享HTML上下文编码', type: 'feature' },
+                    { message: '启用强制脚本CSP并提供Report-Only和Trusted Types评估配置', type: 'feature' }
+                ]
             }
         ];
 
@@ -2522,35 +2848,38 @@ class TravelPlanner {
         return versionHistory.reverse();
     }
 
-    // 生成版本更新的统一HTML
+    // 生成版本更新 DOM；版本文本即使未来来自远端也只进入 textContent。
     generateVersionHtml(version, versionItems) {
-        if (versionItems.length === 0) return '';
-
-        let changesHtml = '';
-        versionItems.forEach(item => {
-            changesHtml += `
-                <div class="version-changes">
-                    <span class="change-type ${item.changeTypeClass}">${item.changeTypeText}</span>
-                    <span class="change-text">${item.text}</span>
-                </div>
-            `;
-        });
+        const fragment = document.createDocumentFragment();
+        if (versionItems.length === 0) return fragment;
 
         const isMultiple = versionItems.length > 1;
         const versionClass = isMultiple ? 'version-item multiple-updates' : 'version-item single-update';
-        const indicator = isMultiple ? `<span class="update-indicator">${versionItems.length}项更新</span>` : '';
+        const versionElement = this.createElement('div', { className: versionClass });
+        const header = this.createElement('div', { className: 'version-header' });
+        header.appendChild(this.createElement('span', { className: 'version-number', text: version }));
+        if (isMultiple) {
+            header.appendChild(this.createElement('span', {
+                className: 'update-indicator',
+                text: `${versionItems.length}项更新`
+            }));
+        }
 
-        return `
-            <div class="${versionClass}">
-                <div class="version-header">
-                    <span class="version-number">${version}</span>
-                    ${indicator}
-                </div>
-                <div class="version-content">
-                    ${changesHtml}
-                </div>
-            </div>
-        `;
+        const content = this.createElement('div', { className: 'version-content' });
+        versionItems.forEach(item => {
+            const changes = this.createElement('div', { className: 'version-changes' });
+            changes.append(
+                this.createElement('span', {
+                    className: `change-type ${item.changeTypeClass}`,
+                    text: item.changeTypeText
+                }),
+                this.createElement('span', { className: 'change-text', text: item.text })
+            );
+            content.appendChild(changes);
+        });
+
+        versionElement.append(header, content);
+        return versionElement;
     }
 
 
@@ -2569,13 +2898,15 @@ class TravelPlanner {
         document.getElementById('customNameInput').value = place.customName || '';
         document.getElementById('notesInput').value = place.notes || '';
 
-        // 显示模态框
-        document.getElementById('editPlaceModal').style.display = 'block';
+        this.dialogManager.open('editPlaceModal', {
+            initialFocus: '#customNameInput',
+            onRequestClose: () => this.closeEditPlaceModal()
+        });
     }
 
     // 关闭编辑游玩点模态框
     closeEditPlaceModal() {
-        document.getElementById('editPlaceModal').style.display = 'none';
+        this.dialogManager.close('editPlaceModal');
         this.currentEditPlace = null;
 
         // 清空表单
@@ -2587,24 +2918,28 @@ class TravelPlanner {
     saveEditPlace() {
         if (!this.currentEditPlace) return;
 
+        // 保存关闭弹窗后仍需使用的引用和名称，避免 closeEditPlaceModal 将对象置空后再访问。
+        const editedPlace = this.currentEditPlace;
         const customName = document.getElementById('customNameInput').value.trim();
         const notes = document.getElementById('notesInput').value.trim();
-
-        // 更新游玩点信息
-        this.currentEditPlace.customName = customName || null;
-        this.currentEditPlace.notes = notes || null;
-
-        // 更新显示（不重新计算距离）
-        this.updateTravelListWithoutRecalculation();
-        this.recreateMarkers(); // 重新创建标记以更新名称
-        this.saveData();
-        this.markAsModified(); // 标记为已修改
+        let displayName;
+        if (Array.isArray(this.travelList)) {
+            const preview = { ...editedPlace };
+            displayName = PlannerData.applyPlaceEdit(preview, customName, notes).displayName;
+            this.dispatch({ type: 'EDIT_PLACE', id: editedPlace.id, customName, notes });
+        } else {
+            // 仅供无完整应用状态的嵌入式调用兼容；正式业务状态只走 dispatch。
+            displayName = PlannerData.applyPlaceEdit(editedPlace, customName, notes).displayName;
+            this.updateTravelListWithoutRecalculation?.();
+            this.recreateMarkers?.();
+            this.markAsModified?.();
+            this.saveData?.();
+        }
 
         // 关闭模态框
         this.closeEditPlaceModal();
 
         // 显示成功提示
-        const displayName = customName || this.currentEditPlace.name;
         this.showToast(`已更新游玩点：${displayName}`);
     }
 
@@ -2615,44 +2950,14 @@ class TravelPlanner {
 
         const displayName = place.customName || place.name;
 
-        // 切换状态
-        place.isPending = !place.isPending;
+        const willBePending = !place.isPending;
+        this.dispatch({ type: 'TOGGLE_PLACE_STATUS', id: placeId });
 
-        // 重新排序：激活的地点移到游玩列表最后，待定的地点移到待定列表最后
-        if (place.isPending) {
-            // 移至待定状态 - 将其移到列表最后
-            const index = this.travelList.indexOf(place);
-            this.travelList.splice(index, 1);
-            this.travelList.push(place);
+        if (willBePending) {
             this.showToast(`"${displayName}" 已移至待定列表`);
         } else {
-            // 激活状态 - 将其插入到所有激活地点的最后
-            const index = this.travelList.indexOf(place);
-            this.travelList.splice(index, 1);
-
-            // 找到最后一个非待定地点的位置
-            let insertIndex = 0;
-            for (let i = 0; i < this.travelList.length; i++) {
-                if (!this.travelList[i].isPending) {
-                    insertIndex = i + 1;
-                }
-            }
-            this.travelList.splice(insertIndex, 0, place);
             this.showToast(`"${displayName}" 已加入游玩列表`);
         }
-
-        // 更新显示和相关计算
-        this.updateTravelList();
-        this.calculateDistancesWithDebounce();
-        this.drawRoute();
-
-        // 如果当前显示待定点，需要重新创建待定点标记
-        if (this.showPendingPlaces) {
-            this.createPendingMarkers();
-        }
-
-        this.saveData();
-        this.markAsModified(); // 标记为已修改
     }
 
     // 添加当前地点到游玩列表
@@ -2681,14 +2986,8 @@ class TravelPlanner {
             isPending: false // 是否为待定状态
         };
 
-        this.travelList.push(newPlace);
-
-        this.updateTravelList();
-        this.calculateDistancesWithDebounce();
-        this.drawRoute(); // 添加地点后重新绘制路线
+        this.dispatch({ type: 'ADD_PLACE', place: newPlace });
         this.closeModal();
-        this.saveData();
-        this.markAsModified(); // 标记为已修改
     }
 
     // 添加空白游玩点
@@ -2705,13 +3004,7 @@ class TravelPlanner {
             isBlank: true // 标记为空白地点
         };
 
-        // 将空白地点添加到游玩列表的最上方（数组开头）
-        this.travelList.unshift(blankPlace);
-
-        // 只更新显示，不重新计算距离或绘制路线
-        this.updateTravelListWithoutRecalculation();
-        this.saveData();
-        this.markAsModified(); // 标记为已修改
+        this.dispatch({ type: 'ADD_BLANK_PLACE', place: blankPlace });
 
         this.showToast('已添加空白游玩点，请编辑名称和备注');
 
@@ -2721,96 +3014,310 @@ class TravelPlanner {
         }, 100);
     }
 
-    // 生成单个游玩点/待定点的 HTML
-    createPlaceItemHTML(place, options = {}) {
-        const { isPending = false, displayOrder = '', index = -1 } = options;
-        const displayName = this.escapeHTML(place.customName || place.name);
-        const escapedDisplayName = displayName.replace(/'/g, "\\'");
-        const escapedAddress = this.escapeHTML(place.address).replace(/'/g, "\\'");
-        const itemClass = isPending ? 'pending-item' : `travel-item ${place.isBlank ? 'blank-item' : ''}`;
+    createActionButton(action, text, title, className = 'action-btn', attributes = {}) {
+        return this.createElement('button', {
+            className,
+            text,
+            title,
+            type: 'button',
+            dataset: { action },
+            attributes: { 'aria-label': title, ...attributes }
+        });
+    }
 
-        let actionsHTML = '';
-        if (isPending) {
-            actionsHTML = `
-                <button class="pending-btn" onclick="app.togglePlaceStatus('${place.id}')" title="加入游玩列表">⏳ 待定</button>
-                ${place.lat && place.lng ? `<button class="action-btn locate-btn" onclick="app.locatePlace(${place.lng}, ${place.lat})" title="在地图上定位">📍</button>` : ''}
-                ${place.lat && place.lng && this.settings.preferences.showShowInMapButton ? `<button class="action-btn show-in-map-btn" onclick="app.showInMap(${place.lng}, ${place.lat}, '${escapedDisplayName}')" title="在导航中显示">🗺️</button>` : ''}
-                <button class="action-btn edit-btn" onclick="app.editPlace('${place.id}')" title="编辑游玩点">✏️</button>
-                <button class="action-btn copy-btn" onclick="app.copyPlaceName('${escapedDisplayName}')" title="复制名称">📋</button>
-                <button class="action-btn copy-btn" onclick="app.copyPlaceAddress('${escapedAddress}')" title="复制地址">📄</button>
-                <button class="action-btn" onclick="app.removePlaceFromList('${place.id}')" title="删除">✕</button>
-            `;
-        } else {
-            actionsHTML = `
-                <button class="activate-btn" onclick="app.togglePlaceStatus('${place.id}')" title="移至待定">🎯 游玩</button>
-                ${place.lat && place.lng ? `<button class="action-btn locate-btn" onclick="app.locatePlace(${place.lng}, ${place.lat})" title="在地图上定位">📍</button>` : ''}
-                ${place.lat && place.lng && this.settings.preferences.showShowInMapButton ? `<button class="action-btn show-in-map-btn" onclick="app.showInMap(${place.lng}, ${place.lat}, '${escapedDisplayName}')" title="在导航中显示">🗺️</button>` : ''}
-                ${place.lat && place.lng && this.settings.preferences.showNavigateToButton ? `<button class="action-btn navigate-to-btn" onclick="app.navigateToPlace(${place.lng}, ${place.lat}, '${escapedDisplayName}')" title="导航到此处">🧭</button>` : ''}
-                <button class="action-btn edit-btn" onclick="app.editPlace('${place.id}')" title="编辑游玩点">✏️</button>
-                <button class="action-btn copy-btn" onclick="app.copyPlaceName('${escapedDisplayName}')" title="复制名称">📋</button>
-                <button class="action-btn copy-btn" onclick="app.copyPlaceAddress('${escapedAddress}')" title="复制地址">📄</button>
-                <button class="action-btn" onclick="app.removePlaceFromList('${place.id}')" title="删除">✕</button>
-            `;
+    // 用户、地图和导入数据只进入 textContent；行为由列表容器统一委托。
+    createPlaceItemElement(place, options = {}) {
+        const { isPending = false, displayOrder = '', activeIndex = -1, activeCount = 0 } = options;
+        const displayName = String(place.customName || place.name || '');
+        const itemClass = isPending ? 'pending-item' : `travel-item${place.isBlank ? ' blank-item' : ''}`;
+        const item = this.createElement('li', {
+            className: itemClass,
+            dataset: { id: String(place.id) }
+        });
+        if (!isPending) item.draggable = true;
+
+        const header = this.createElement('div', {
+            className: isPending ? 'pending-item-header' : 'travel-item-header'
+        });
+        const left = this.createElement('div', {
+            className: isPending ? 'pending-item-left' : 'travel-item-left'
+        });
+        if (!isPending) {
+            left.appendChild(this.createElement('span', {
+                className: 'drag-handle',
+                text: '⠿',
+                attributes: { 'aria-hidden': 'true' }
+            }));
+        }
+        if (displayOrder !== '') {
+            left.appendChild(this.createElement('span', { className: 'travel-item-order', text: displayOrder }));
+        }
+        left.appendChild(this.createElement('span', {
+            className: isPending ? 'pending-item-name' : 'travel-item-name',
+            text: displayName
+        }));
+        header.appendChild(left);
+        if (!isPending) {
+            const reorderControls = this.createElement('div', {
+                className: 'reorder-controls',
+                attributes: { role: 'group', 'aria-label': `${displayName}排序操作` }
+            });
+            reorderControls.append(
+                this.createActionButton(
+                    'move-up',
+                    '↑',
+                    `将“${displayName}”上移`,
+                    'reorder-btn',
+                    { disabled: undefined }
+                ),
+                this.createActionButton(
+                    'move-down',
+                    '↓',
+                    `将“${displayName}”下移`,
+                    'reorder-btn'
+                )
+            );
+            reorderControls.firstElementChild.disabled = activeIndex <= 0;
+            reorderControls.lastElementChild.disabled = activeIndex < 0 || activeIndex >= activeCount - 1;
+            header.appendChild(reorderControls);
         }
 
-        return `
-            <li class="${itemClass}" ${!isPending ? 'draggable="true"' : ''} data-id="${place.id}">
-                <div class="${isPending ? 'pending-item-header' : 'travel-item-header'}">
-                    <div class="${isPending ? 'pending-item-left' : 'travel-item-left'}">
-                        ${!isPending ? '<span class="drag-handle">⠿</span>' : ''}
-                        ${displayOrder ? `<span class="travel-item-order">${displayOrder}</span>` : ''}
-                        <span class="${isPending ? 'pending-item-name' : 'travel-item-name'}">${displayName}</span>
-                    </div>
-                </div>
-                <div class="${isPending ? 'pending-item-address' : 'travel-item-address'}">📮 ${this.escapeHTML(place.address)}</div>
-                ${place.notes ? `<div class="${isPending ? 'pending-item-notes' : 'travel-item-notes'}">${this.escapeHTML(place.notes)}</div>` : ''}
-                <div class="${isPending ? 'pending-item-actions' : 'travel-item-actions'}">
-                    ${actionsHTML}
-                </div>
-            </li>
-        `;
+        const address = this.createElement('div', {
+            className: isPending ? 'pending-item-address' : 'travel-item-address',
+            text: `📮 ${String(place.address || '')}`
+        });
+
+        const actions = this.createElement('div', {
+            className: isPending ? 'pending-item-actions' : 'travel-item-actions'
+        });
+        actions.appendChild(this.createActionButton(
+            'toggle-status',
+            isPending ? '⏳ 待定' : '🎯 游玩',
+            isPending ? '加入游玩列表' : '移至待定',
+            isPending ? 'pending-btn' : 'activate-btn',
+            {
+                'aria-label': `游玩地点：${displayName}`,
+                'aria-pressed': String(!isPending)
+            }
+        ));
+
+        if (PlannerData.isValidCoordinate(place)) {
+            actions.appendChild(this.createActionButton('locate', '📍', '在地图上定位', 'action-btn locate-btn'));
+            if (this.settings.preferences.showShowInMapButton) {
+                actions.appendChild(this.createActionButton('show-in-map', '🗺️', '在导航中显示', 'action-btn show-in-map-btn'));
+            }
+            if (!isPending && this.settings.preferences.showNavigateToButton) {
+                actions.appendChild(this.createActionButton('navigate-to', '🧭', '导航到此处', 'action-btn navigate-to-btn'));
+            }
+        }
+
+        actions.append(
+            this.createActionButton('edit', '✏️', '编辑游玩点', 'action-btn edit-btn'),
+            this.createActionButton('copy-name', '📋', '复制名称', 'action-btn copy-btn'),
+            this.createActionButton('copy-address', '📄', '复制地址', 'action-btn copy-btn'),
+            this.createActionButton('remove', '✕', '删除')
+        );
+
+        item.append(header, address);
+        if (place.notes) {
+            item.appendChild(this.createElement('div', {
+                className: isPending ? 'pending-item-notes' : 'travel-item-notes',
+                text: String(place.notes)
+            }));
+        }
+        item.appendChild(actions);
+        return item;
+    }
+
+    createRouteSegmentElement(place, previousPlace, index, distanceText, durationText) {
+        const segment = this.createElement('li', { className: 'route-segment' });
+        const connector = this.createElement('div', { className: 'route-connector' });
+        const hasCoordinates = PlannerData.isValidCoordinate(place) && PlannerData.isValidCoordinate(previousPlace);
+
+        if (hasCoordinates && !place.isBlank) {
+            const segmentKey = `${String(previousPlace.id)}-${String(place.id)}`;
+
+            connector.appendChild(this.createElement('div', { className: 'route-line' }));
+            const card = this.createElement('div', { className: 'route-info-card compact' });
+            const routeInfo = this.createElement('div', { className: 'route-info' });
+            const distance = this.createElement('span', { className: 'distance-info', text: '🚗 ' });
+            const distanceValue = this.createElement('span', { text: distanceText });
+            distanceValue.id = `distance-${String(place.id)}`;
+            distance.appendChild(distanceValue);
+            const duration = this.createElement('span', { className: 'duration-info', text: '⏱️ ' });
+            const durationValue = this.createElement('span', { text: durationText });
+            durationValue.id = `duration-${String(place.id)}`;
+            duration.appendChild(durationValue);
+            routeInfo.append(distance, duration);
+
+            const navigate = this.createActionButton('navigate-route', '🧭', '打开导航', 'navigate-btn compact');
+            navigate.dataset.segmentKey = segmentKey;
+            navigate.dataset.fromIndex = String(index - 1);
+            navigate.dataset.toIndex = String(index);
+            card.append(routeInfo, navigate);
+            connector.appendChild(card);
+        } else {
+            connector.appendChild(this.createElement('div', { className: 'route-line no-coordinates' }));
+            const card = this.createElement('div', { className: 'route-info-card compact disabled' });
+            const routeInfo = this.createElement('div', { className: 'route-info' });
+            routeInfo.appendChild(this.createElement('span', {
+                className: 'distance-info',
+                text: `📍 ${place.isBlank ? '空白地点' : '无地理信息'}`
+            }));
+            card.appendChild(routeInfo);
+            connector.appendChild(card);
+        }
+
+        segment.appendChild(connector);
+        return segment;
     }
 
     // 更新游玩列表显示
     updateTravelList() {
-        // 分离游玩中和待定的地点
-        const activePlaces = this.travelList.filter(place => !place.isPending);
-        const pendingPlaces = this.travelList.filter(place => place.isPending);
-
-        // 更新游玩列表
-        this.updateActiveList(activePlaces);
-
-        // 更新待定列表
-        this.updatePendingList(pendingPlaces);
-
-        this.setupDragAndDrop();
-
-        // 重新创建所有标记（只为激活的地点）
-        this.recreateMarkers();
-
-        // 刷新城市过滤按钮状态
+        this.renderTravelListsIncremental();
+        this.syncMarkersIncremental();
         this.updateCityFilterButton();
     }
 
     // 更新游玩列表显示（不触发距离重新计算）
     updateTravelListWithoutRecalculation() {
-        // 分离游玩中和待定的地点
+        this.renderTravelListsIncremental();
+        this.syncMarkersIncremental();
+        this.updateCityFilterButton();
+    }
+
+    routeMetricDisplay(fromPlace, toPlace) {
+        if (!PlannerData.isUsablePlace(fromPlace) || !PlannerData.isUsablePlace(toPlace)) {
+            return { distanceText: '无地理信息', durationText: '无法计算' };
+        }
+
+        const segmentKey = `${fromPlace.id}-${toPlace.id}`;
+        const metrics = this.routeMetrics?.get(segmentKey);
+        const result = this.routeResults?.get(segmentKey);
+        const matchesCurrentCoordinates = result &&
+            Number(result.origin?.lat).toFixed(5) === Number(fromPlace?.lat).toFixed(5) &&
+            Number(result.origin?.lng).toFixed(5) === Number(fromPlace?.lng).toFixed(5) &&
+            Number(result.destination?.lat).toFixed(5) === Number(toPlace?.lat).toFixed(5) &&
+            Number(result.destination?.lng).toFixed(5) === Number(toPlace?.lng).toFixed(5);
+        if (!metrics || !matchesCurrentCoordinates) {
+            return { distanceText: '计算中...', durationText: '计算中...' };
+        }
+        const estimated = result?.source !== 'provider';
+        return {
+            distanceText: `${(metrics.distanceMeters / 1000).toFixed(1)} 公里${estimated ? ' (直线估算)' : ''}`,
+            durationText: `${estimated ? '约' : ''}${Math.round(metrics.durationSeconds / 60)} 分钟`
+        };
+    }
+
+    createActiveListDescriptors(activePlaces) {
+        if (activePlaces.length === 0) {
+            return [{
+                key: 'empty:active',
+                signature: 'empty:active:v1',
+                create: () => this.createElement('li', { className: 'empty-active', text: '暂无游玩地点' })
+            }];
+        }
+
+        const descriptors = [];
+        let nonBlankIndex = 0;
+        let previousUsable = null;
+        activePlaces.forEach((place, index) => {
+            if (index > 0) {
+                const segmentFrom = previousUsable;
+                const segmentPlace = place;
+                const segmentIndex = index;
+                const metric = this.routeMetricDisplay(segmentFrom, segmentPlace);
+                const segmentKey = `segment:${segmentFrom ? String(segmentFrom.id) : 'none'}:${String(segmentPlace.id)}`;
+                const signature = JSON.stringify([
+                    segmentKey,
+                    PlannerData.isValidCoordinate(segmentPlace),
+                    segmentFrom ? `${segmentFrom.lat},${segmentFrom.lng}` : '',
+                    `${segmentPlace.lat},${segmentPlace.lng}`,
+                    metric.distanceText,
+                    metric.durationText
+                ]);
+                descriptors.push({
+                    key: segmentKey,
+                    signature,
+                    create: () => this.createRouteSegmentElement(
+                        segmentPlace,
+                        segmentFrom,
+                        segmentIndex,
+                        metric.distanceText,
+                        metric.durationText
+                    )
+                });
+            }
+
+            const displayOrder = place.isBlank ? '✏️' : ++nonBlankIndex;
+            const placeKey = `place:${String(place.id)}`;
+            const signature = JSON.stringify([
+                placeKey,
+                displayOrder,
+                place.name,
+                place.customName,
+                place.address,
+                place.notes,
+                place.isBlank,
+                index,
+                activePlaces.length,
+                this.settings.preferences
+            ]);
+            descriptors.push({
+                key: placeKey,
+                signature,
+                create: () => this.createPlaceItemElement(place, {
+                    isPending: false,
+                    displayOrder,
+                    activeIndex: index,
+                    activeCount: activePlaces.length
+                })
+            });
+            if (PlannerData.isUsablePlace(place)) previousUsable = place;
+        });
+        return descriptors;
+    }
+
+    createPendingListDescriptors(pendingPlaces) {
+        if (pendingPlaces.length === 0) {
+            return [{
+                key: 'empty:pending',
+                signature: 'empty:pending:v1',
+                create: () => this.createElement('li', { className: 'empty-pending', text: '暂无待定地点' })
+            }];
+        }
+        return pendingPlaces.map(place => ({
+            key: `pending:${String(place.id)}`,
+            signature: JSON.stringify([
+                place.id,
+                place.name,
+                place.customName,
+                place.address,
+                place.notes,
+                place.lat,
+                place.lng,
+                this.settings.preferences
+            ]),
+            create: () => this.createPlaceItemElement(place, { isPending: true })
+        }));
+    }
+
+    renderTravelListsIncremental() {
         const activePlaces = this.travelList.filter(place => !place.isPending);
         const pendingPlaces = this.travelList.filter(place => place.isPending);
-
-        // 更新游玩列表（保留现有距离信息）
-        this.updateActiveListWithoutRecalculation(activePlaces);
-
-        // 更新待定列表
-        this.updatePendingList(pendingPlaces);
-
+        const activeResult = PerformanceCore.reconcileKeyedChildren(
+            document.getElementById('travelList'),
+            this.createActiveListDescriptors(activePlaces)
+        );
+        const pendingResult = PerformanceCore.reconcileKeyedChildren(
+            document.getElementById('pendingList'),
+            this.createPendingListDescriptors(pendingPlaces)
+        );
+        if (this.performanceMetrics) {
+            this.performanceMetrics.listNodesCreated += activeResult.created + pendingResult.created;
+            this.performanceMetrics.listNodesReused += activeResult.reused + pendingResult.reused;
+        }
         this.setupDragAndDrop();
-
-        // 重新创建所有标记（只为激活的地点）
-        this.recreateMarkers();
-
-        // 刷新城市过滤按钮状态
-        this.updateCityFilterButton();
     }
 
     // 更新游玩列表（激活状态的地点，保留现有距离信息）
@@ -2818,7 +3325,7 @@ class TravelPlanner {
         const listContainer = document.getElementById('travelList');
 
         if (activePlaces.length === 0) {
-            listContainer.innerHTML = '<li style="text-align: center; color: #666; padding: 20px;">暂无游玩地点</li>';
+            listContainer.replaceChildren(this.createElement('li', { className: 'empty-active', text: '暂无游玩地点' }));
             return;
         }
 
@@ -2838,7 +3345,7 @@ class TravelPlanner {
             }
         });
 
-        let htmlContent = '';
+        const fragment = document.createDocumentFragment();
         let nonBlankIndex = 0; // 非空白地点的序号计数器
 
         activePlaces.forEach((place, index) => {
@@ -2847,58 +3354,19 @@ class TravelPlanner {
                 // 找到前一个非空白地点来计算距离
                 let prevNonBlankPlace = null;
                 for (let i = index - 1; i >= 0; i--) {
-                    if (activePlaces[i].lat && activePlaces[i].lng && !activePlaces[i].isBlank) {
+                    if (PlannerData.isUsablePlace(activePlaces[i])) {
                         prevNonBlankPlace = activePlaces[i];
                         break;
                     }
                 }
 
-                const hasCoordinates = place.lat && place.lng && prevNonBlankPlace && prevNonBlankPlace.lat && prevNonBlankPlace.lng;
-
-                if (hasCoordinates && !place.isBlank) {
-                    // 显示到前一个非空白地点的距离
-                    const segmentKey = `${prevNonBlankPlace.id}-${place.id}`;
-
-                    // 确保新路线段使用高德地图作为默认
-                    if (!this.routeSegments.has(segmentKey)) {
-                        this.routeSegments.set(segmentKey, { mapProvider: 'amap' });
-                    }
-
-                    // 使用保存的距离信息或默认显示
-                    const distanceText = existingDistances[place.id] || '保持原值';
-                    const durationText = existingDurations[place.id] || '保持原值';
-
-                    htmlContent += `
-                        <li class="route-segment">
-                            <div class="route-connector">
-                                <div class="route-line"></div>
-                                <div class="route-info-card compact">
-                                    <div class="route-info">
-                                        <span class="distance-info">🚗 <span id="distance-${place.id}">${distanceText}</span></span>
-                                        <span class="duration-info">⏱️ <span id="duration-${place.id}">${durationText}</span></span>
-                                    </div>
-                                    <button class="navigate-btn compact" onclick="app.openNavigationRoute('${segmentKey}', ${index - 1}, ${index})" title="打开导航">
-                                        🧭
-                                    </button>
-                                </div>
-                            </div>
-                        </li>
-                    `;
-                } else if (place.isBlank || !hasCoordinates) {
-                    // 空白地点或无坐标地点显示简单的分隔线
-                    htmlContent += `
-                        <li class="route-segment">
-                            <div class="route-connector">
-                                <div class="route-line no-coordinates"></div>
-                                <div class="route-info-card compact disabled">
-                                    <div class="route-info">
-                                        <span class="distance-info">📍 ${place.isBlank ? '空白地点' : '无地理信息'}</span>
-                                    </div>
-                                </div>
-                            </div>
-                        </li>
-                    `;
-                }
+                fragment.appendChild(this.createRouteSegmentElement(
+                    place,
+                    prevNonBlankPlace,
+                    index,
+                    existingDistances[place.id] || '保持原值',
+                    existingDurations[place.id] || '保持原值'
+                ));
             }
 
             // 只为非空白地点分配序号
@@ -2910,10 +3378,15 @@ class TravelPlanner {
                 displayOrder = '✏️'; // 空白地点显示编辑图标
             }
 
-            htmlContent += this.createPlaceItemHTML(place, { isPending: false, displayOrder, index });
+            fragment.appendChild(this.createPlaceItemElement(place, {
+                isPending: false,
+                displayOrder,
+                activeIndex: index,
+                activeCount: activePlaces.length
+            }));
         });
 
-        listContainer.innerHTML = htmlContent;
+        listContainer.replaceChildren(fragment);
     }
 
     // 更新游玩列表（激活状态的地点）
@@ -2921,11 +3394,11 @@ class TravelPlanner {
         const listContainer = document.getElementById('travelList');
 
         if (activePlaces.length === 0) {
-            listContainer.innerHTML = '<li style="text-align: center; color: #666; padding: 20px;">暂无游玩地点</li>';
+            listContainer.replaceChildren(this.createElement('li', { className: 'empty-active', text: '暂无游玩地点' }));
             return;
         }
 
-        let htmlContent = '';
+        const fragment = document.createDocumentFragment();
         let nonBlankIndex = 0; // 非空白地点的序号计数器
 
         activePlaces.forEach((place, index) => {
@@ -2934,54 +3407,18 @@ class TravelPlanner {
                 // 找到前一个非空白地点来计算距离
                 let prevNonBlankPlace = null;
                 for (let i = index - 1; i >= 0; i--) {
-                    if (activePlaces[i].lat && activePlaces[i].lng && !activePlaces[i].isBlank) {
+                    if (PlannerData.isUsablePlace(activePlaces[i])) {
                         prevNonBlankPlace = activePlaces[i];
                         break;
                     }
                 }
-
-                const hasCoordinates = place.lat && place.lng && prevNonBlankPlace && prevNonBlankPlace.lat && prevNonBlankPlace.lng;
-
-                if (hasCoordinates && !place.isBlank) {
-                    // 显示到前一个非空白地点的距离
-                    const segmentKey = `${prevNonBlankPlace.id}-${place.id}`;
-
-                    // 确保新路线段使用高德地图作为默认
-                    if (!this.routeSegments.has(segmentKey)) {
-                        this.routeSegments.set(segmentKey, { mapProvider: 'amap' });
-                    }
-
-                    htmlContent += `
-                        <li class="route-segment">
-                            <div class="route-connector">
-                                <div class="route-line"></div>
-                                <div class="route-info-card compact">
-                                    <div class="route-info">
-                                        <span class="distance-info">🚗 <span id="distance-${place.id}">计算中...</span></span>
-                                        <span class="duration-info">⏱️ <span id="duration-${place.id}">计算中...</span></span>
-                                    </div>
-                                    <button class="navigate-btn compact" onclick="app.openNavigationRoute('${segmentKey}', ${index - 1}, ${index})" title="打开导航">
-                                        🧭
-                                    </button>
-                                </div>
-                            </div>
-                        </li>
-                    `;
-                } else if (place.isBlank || !hasCoordinates) {
-                    // 空白地点或无坐标地点显示简单的分隔线
-                    htmlContent += `
-                        <li class="route-segment">
-                            <div class="route-connector">
-                                <div class="route-line no-coordinates"></div>
-                                <div class="route-info-card compact disabled">
-                                    <div class="route-info">
-                                        <span class="distance-info">📍 ${place.isBlank ? '空白地点' : '无地理信息'}</span>
-                                    </div>
-                                </div>
-                            </div>
-                        </li>
-                    `;
-                }
+                fragment.appendChild(this.createRouteSegmentElement(
+                    place,
+                    prevNonBlankPlace,
+                    index,
+                    '计算中...',
+                    '计算中...'
+                ));
             }
 
             // 只为非空白地点分配序号
@@ -2993,10 +3430,15 @@ class TravelPlanner {
                 displayOrder = '✏️'; // 空白地点显示编辑图标
             }
 
-            htmlContent += this.createPlaceItemHTML(place, { isPending: false, displayOrder, index });
+            fragment.appendChild(this.createPlaceItemElement(place, {
+                isPending: false,
+                displayOrder,
+                activeIndex: index,
+                activeCount: activePlaces.length
+            }));
         });
 
-        listContainer.innerHTML = htmlContent;
+        listContainer.replaceChildren(fragment);
     }
 
     // 更新待定列表
@@ -3004,22 +3446,24 @@ class TravelPlanner {
         const listContainer = document.getElementById('pendingList');
 
         if (pendingPlaces.length === 0) {
-            listContainer.innerHTML = '<li class="empty-pending">暂无待定地点</li>';
+            listContainer.replaceChildren(this.createElement('li', { className: 'empty-pending', text: '暂无待定地点' }));
             return;
         }
 
-        let htmlContent = '';
+        const fragment = document.createDocumentFragment();
         pendingPlaces.forEach((place) => {
-            htmlContent += this.createPlaceItemHTML(place, { isPending: true });
+            fragment.appendChild(this.createPlaceItemElement(place, { isPending: true }));
         });
 
-        listContainer.innerHTML = htmlContent;
+        listContainer.replaceChildren(fragment);
     }
 
     // 设置拖拽功能
     setupDragAndDrop() {
         const items = document.querySelectorAll('.travel-item');
         items.forEach(item => {
+            if (item.dataset.dragBound === 'true') return;
+            item.dataset.dragBound = 'true';
             item.addEventListener('dragstart', this.handleDragStart.bind(this));
             item.addEventListener('dragover', this.handleDragOver.bind(this));
             item.addEventListener('drop', this.handleDrop.bind(this));
@@ -3053,33 +3497,53 @@ class TravelPlanner {
 
     // 重新排序游玩列表
     reorderTravelList(draggedId, targetId) {
-        const draggedIndex = this.travelList.findIndex(item => item.id.toString() === draggedId);
-        const targetIndex = this.travelList.findIndex(item => item.id.toString() === targetId);
+        const moved = this.getPlaceById(draggedId);
+        this.dispatch({ type: 'REORDER_PLACES', draggedId, targetId });
+        if (moved) this.announceSortResult(moved, '拖拽');
+    }
 
-        if (draggedIndex !== -1 && targetIndex !== -1) {
-            const [draggedItem] = this.travelList.splice(draggedIndex, 1);
-            this.travelList.splice(targetIndex, 0, draggedItem);
+    movePlaceByOffset(placeId, offset) {
+        const activePlaces = this.travelList.filter(place => !place.isPending);
+        const currentIndex = activePlaces.findIndex(place => String(place.id) === String(placeId));
+        const targetIndex = currentIndex + offset;
+        if (currentIndex < 0 || targetIndex < 0 || targetIndex >= activePlaces.length) return;
 
-            // 检查拖动的项目是否为空白地点
-            const isDraggingBlank = draggedItem.isBlank;
+        const moved = activePlaces[currentIndex];
+        const target = activePlaces[targetIndex];
+        this.dispatch({ type: 'REORDER_PLACES', draggedId: moved.id, targetId: target.id });
+        this.announceSortResult(moved, offset < 0 ? '上移' : '下移');
+        requestAnimationFrame(() => {
+            const item = Array.from(document.querySelectorAll('#travelList .travel-item'))
+                .find(element => element.dataset.id === String(placeId));
+            const preferred = item?.querySelector(`[data-action="${offset < 0 ? 'move-up' : 'move-down'}"]`);
+            const focusTarget = preferred && !preferred.disabled
+                ? preferred
+                : item?.querySelector('.reorder-btn:not(:disabled)');
+            focusTarget?.focus();
+        });
+    }
 
-            if (isDraggingBlank) {
-                // 如果是空白地点，使用不重新计算距离的方法
-                this.updateTravelListWithoutRecalculation();
-            } else {
-                // 如果是普通地点，正常更新并重新计算距离
-                this.updateTravelList();
-                this.calculateDistancesWithDebounce();
-                this.drawRoute();
-            }
-
-            this.saveData();
-            this.markAsModified(); // 标记为已修改
-        }
+    announceSortResult(place, action) {
+        const activePlaces = this.travelList.filter(candidate => !candidate.isPending);
+        const position = activePlaces.findIndex(candidate => String(candidate.id) === String(place.id)) + 1;
+        const displayName = String(place.customName || place.name || '地点');
+        const message = `${displayName}已${action}至第${position}位，共${activePlaces.length}个游玩地点`;
+        const region = document.getElementById('sortStatus');
+        if (!region) return;
+        region.textContent = '';
+        requestAnimationFrame(() => {
+            region.textContent = message;
+        });
     }
 
     // 定位地点
     locatePlace(lng, lat) {
+        lng = Number(lng);
+        lat = Number(lat);
+        if (!PlannerData.isValidCoordinate({ lng, lat })) {
+            this.showToast('地点坐标无效');
+            return;
+        }
         console.log(`🎯 定位到地点: ${lng.toFixed(6)}, ${lat.toFixed(6)}`);
 
         if (this.isMapLoaded) {
@@ -3148,6 +3612,14 @@ class TravelPlanner {
 
     // 从当前位置导航到指定地点
     navigateToPlace(lng, lat, name) {
+        lng = Number(lng);
+        lat = Number(lat);
+        name = String(name ?? '');
+        if (!PlannerData.isValidCoordinate({ lng, lat })) {
+            this.showToast('地点坐标无效');
+            return;
+        }
+
         // 根据用户设置选择导航应用
         const navigationApp = this.settings.navigationApp || 'amap';
         const isMobile = this.isMobileDevice();
@@ -3189,29 +3661,51 @@ class TravelPlanner {
     }
 
     // 打开导航URL的通用方法
-    openNavigationUrl(url, appName, placeName) {
+    openNavigationUrl(url, appName, placeName, actionText = '导航到') {
+        const safeUrl = Security.sanitizeUrl(url, {
+            allowedHttpsOrigins: [
+                'https://uri.amap.com',
+                'https://www.google.com',
+                'https://www.bing.com',
+                'https://map.tianditu.gov.cn'
+            ]
+        });
+        if (!safeUrl) {
+            this.showToast('导航链接未通过安全校验');
+            return;
+        }
+
         // 根据用户偏好设置决定是否在新标签页中打开
         const openInNewTab = this.settings.preferences?.openInNewTab !== false;
         const target = openInNewTab ? '_blank' : '_self';
 
         try {
-            window.open(url, target);
+            const openedWindow = window.open(safeUrl, target, openInNewTab ? 'noopener,noreferrer' : undefined);
+            if (openedWindow && openInNewTab) openedWindow.opener = null;
 
             // 如果用户设置了显示导航提示
             if (this.settings.preferences?.showNavigationHint !== false) {
                 const targetText = openInNewTab ? '新标签页' : '当前页面';
-                this.showToast(`已在${targetText}中打开${appName}导航到: ${placeName}`);
+                this.showToast(`已在${targetText}中打开${appName}${actionText}: ${placeName}`);
             }
         } catch (error) {
             // 备用方案：复制导航链接
-            navigator.clipboard.writeText(url).then(() => {
-                this.showToast(`${appName}导航链接已复制到剪贴板`);
+            navigator.clipboard.writeText(safeUrl).then(() => {
+                this.showToast(`${appName}链接已复制到剪贴板`);
             });
         }
     }
 
     // 在地图中显示游玩点（不进行导航，仅显示位置）
     showInMap(lng, lat, name) {
+        lng = Number(lng);
+        lat = Number(lat);
+        name = String(name ?? '');
+        if (!PlannerData.isValidCoordinate({ lng, lat })) {
+            this.showToast('地点坐标无效');
+            return;
+        }
+
         // 根据用户设置选择导航应用（统一使用导航设置）
         const navigationApp = this.settings.navigationApp || 'amap';
         let url = '';
@@ -3245,24 +3739,7 @@ class TravelPlanner {
                 break;
         }
 
-        // 根据用户偏好设置决定是否在新标签页中打开
-        const openInNewTab = this.settings.preferences?.openInNewTab !== false;
-        const target = openInNewTab ? '_blank' : '_self';
-
-        try {
-            window.open(url, target);
-
-            // 如果用户设置了显示导航提示
-            if (this.settings.preferences?.showNavigationHint !== false) {
-                const targetText = openInNewTab ? '新标签页' : '当前页面';
-                this.showToast(`已在${targetText}中打开${appName}显示: ${name}`);
-            }
-        } catch (error) {
-            // 备用方案：复制地图链接
-            navigator.clipboard.writeText(url).then(() => {
-                this.showToast(`${appName}显示链接已复制到剪贴板`);
-            });
-        }
+        this.openNavigationUrl(url, appName, name, '显示');
     }
 
     // 需要获取当前位置的导航方式（高德桌面版、Google、Bing等）
@@ -3296,24 +3773,7 @@ class TravelPlanner {
                             break;
                     }
 
-                    // 根据用户偏好设置决定是否在新标签页中打开
-                    const openInNewTab = this.settings.preferences?.openInNewTab !== false;
-                    const target = openInNewTab ? '_blank' : '_self';
-
-                    try {
-                        window.open(url, target);
-
-                        // 如果用户设置了显示导航提示
-                        if (this.settings.preferences?.showNavigationHint !== false) {
-                            const targetText = openInNewTab ? '新标签页' : '当前页面';
-                            this.showToast(`已在${targetText}中打开${appName}导航到: ${name}`);
-                        }
-                    } catch (error) {
-                        // 备用方案：复制导航链接
-                        navigator.clipboard.writeText(url).then(() => {
-                            this.showToast(`${appName}导航链接已复制到剪贴板`);
-                        });
-                    }
+                    this.openNavigationUrl(url, appName, name);
                 },
                 (error) => {
                     alert('获取当前位置失败，请检查定位权限设置');
@@ -3325,19 +3785,18 @@ class TravelPlanner {
     }
 
     // 显示提示消息
-    showToast(message) {
-        // 检查是否为紧凑模式，如果是则简化消息
-        const isCompactMode = document.body.classList.contains('mobile-compact-mode');
-        let displayMessage = message;
-
-        if (isCompactMode) {
-            displayMessage = this.simplifyToastMessage(message);
-        }
-
+    showToast(message, priority = 'auto') {
         // 创建toast元素
         const toast = document.createElement('div');
         toast.className = 'toast';
-        toast.textContent = displayMessage;
+        toast.textContent = message;
+        const isUrgent = priority === 'assertive' || (
+            priority === 'auto' && /失败|错误|无效|无法|不支持|配额|权限不足/.test(String(message))
+        );
+        toast.setAttribute('role', isUrgent ? 'alert' : 'status');
+        toast.setAttribute('aria-live', isUrgent ? 'assertive' : 'polite');
+        toast.setAttribute('aria-atomic', 'true');
+        toast.dataset.liveRegion = '';
 
         // 添加到页面
         document.body.appendChild(toast);
@@ -3347,8 +3806,6 @@ class TravelPlanner {
             toast.classList.add('show');
         }, 100);
 
-        // 紧凑模式下缩短显示时间
-        const displayTime = isCompactMode ? 2000 : 3000;
         setTimeout(() => {
             toast.classList.remove('show');
             setTimeout(() => {
@@ -3356,66 +3813,7 @@ class TravelPlanner {
                     document.body.removeChild(toast);
                 }
             }, 300);
-        }, displayTime);
-    }
-
-    // 简化Toast消息（紧凑模式专用）
-    simplifyToastMessage(message) {
-        const simplifications = {
-            '🎯 已启用紧凑模式，获得更多显示空间': '✅ 紧凑模式',
-            '📱 已退出紧凑模式': '❌ 退出紧凑',
-            '已在新标签页中打开': '✅ 已打开',
-            '已在当前页面中打开': '✅ 已打开',
-            '导航链接已复制到剪贴板': '📋 已复制',
-            '显示链接已复制到剪贴板': '📋 已复制',
-            '✅ 已定位到您的位置': '📍 已定位',
-            '已复制地点名称': '📋 已复制',
-            '已复制地址': '📋 已复制',
-            '已切换到普通地图': '🗺️ 普通图',
-            '已切换到卫星图': '🛰️ 卫星图',
-            '已显示地点名称': '🏷️ 显示名称',
-            '已隐藏地点名称': '🏷️ 隐藏名称',
-            '已显示待定点': '⏳ 显示待定',
-            '已隐藏待定点': '⏳ 隐藏待定',
-            '设置已保存': '✅ 已保存',
-            '至少需要2个有效地点才能显示路线': '⚠️ 需要2+地点',
-            '请先添加一些游玩地点再导出': '⚠️ 先添加地点'
-        };
-
-        // 优先匹配完整消息
-        if (simplifications[message]) {
-            return simplifications[message];
-        }
-
-        // 处理包含动态内容的消息
-        if (message.includes('已更新游玩点：')) {
-            return '✅ 已更新';
-        }
-        if (message.includes('已移至待定列表')) {
-            return '⏳ 移至待定';
-        }
-        if (message.includes('已加入游玩列表')) {
-            return '✅ 已加入';
-        }
-        if (message.includes('已显示') && message.includes('个地点的完整路线')) {
-            return '🛣️ 已显示路线';
-        }
-        if (message.includes('已显示') && message.includes('个待定点')) {
-            return '⏳ 显示待定';
-        }
-        if (message.includes('导航到')) {
-            return '🧭 导航中';
-        }
-        if (message.includes('显示:')) {
-            return '🗺️ 已显示';
-        }
-
-        // 如果消息太长，截断并添加省略号
-        if (message.length > 15) {
-            return message.substring(0, 12) + '...';
-        }
-
-        return message;
+        }, 3000);
     }
 
     // 显示恢复总地图按钮
@@ -3424,7 +3822,7 @@ class TravelPlanner {
             const mapControls = document.querySelector('.map-controls');
             this.returnToOverviewBtn = document.createElement('button');
             this.returnToOverviewBtn.className = 'control-btn return-overview-btn';
-            this.returnToOverviewBtn.innerHTML = '🗺️ 恢复总地图';
+            this.returnToOverviewBtn.textContent = '🗺️ 恢复总地图';
             this.returnToOverviewBtn.title = '返回查看所有游玩点（不包括待定列表）';
             this.returnToOverviewBtn.addEventListener('click', () => this.returnToOverview());
             mapControls.appendChild(this.returnToOverviewBtn);
@@ -3435,8 +3833,7 @@ class TravelPlanner {
     // 恢复总地图视图
     returnToOverview() {
         if (this.isMapLoaded && this.travelList.length > 0) {
-            // 只显示激活状态的游玩点
-            const activePlaces = this.travelList.filter(place => !place.isPending);
+            const activePlaces = this.getUsablePlaces();
 
             if (activePlaces.length > 0) {
                 if (this.currentCityFilter === 'all') {
@@ -3464,560 +3861,352 @@ class TravelPlanner {
 
     // 从列表中删除地点
     removePlaceFromList(id) {
-        this.travelList = this.travelList.filter(item => item.id.toString() !== id);
-        this.updateTravelList();
-        this.calculateDistancesWithDebounce();
-        this.drawRoute(); // 删除地点后重新绘制路线
-        this.removeMarker(id);
-        this.saveData();
-        this.markAsModified(); // 标记为已修改
+        this.dispatch({ type: 'REMOVE_PLACE', id });
+    }
 
-        // 删除地点后更新城市过滤状态
-        this.updateCityFilterButton();
+    beginRouteTokens() {
+        return {
+            distance: this.taskGenerations.begin('distance'),
+            route: this.taskGenerations.begin('route')
+        };
+    }
+
+    areRouteTokensCurrent(tokens) {
+        return Boolean(tokens &&
+            this.taskGenerations.isCurrent(tokens.distance) &&
+            this.taskGenerations.isCurrent(tokens.route));
+    }
+
+    generateRoutePipelineSignature() {
+        const precision = PerformanceCore.ROUTE_COORDINATE_PRECISION;
+        return JSON.stringify({
+            provider: this.settings.selectedMapApi,
+            travelMode: this.routePlanOptions?.travelMode || 'DRIVING',
+            roundTrip: this.routePlanOptions?.roundTrip === true,
+            precision,
+            algorithmVersion: PerformanceCore.ROUTE_ALGORITHM_VERSION,
+            places: this.getUsablePlaces().map(place => [
+                String(place.id),
+                Number(place.lat).toFixed(precision),
+                Number(place.lng).toFixed(precision)
+            ])
+        });
+    }
+
+    buildRoutePipelineSegments() {
+        const places = this.getUsablePlaces();
+        const segments = PlannerData.buildValidSegments(places)
+            .map(([from, to]) => ({ from, to, isReturn: false }));
+        if (this.routePlanOptions?.roundTrip && places.length > 1) {
+            segments.push({ from: places[places.length - 1], to: places[0], isReturn: true });
+        }
+        return segments;
+    }
+
+    scheduleRoutePipeline(delayMs = 80) {
+        if (this.routePipelineTimer) clearTimeout(this.routePipelineTimer);
+        const tokens = this.beginRouteTokens();
+        const signature = this.generateRoutePipelineSignature();
+        const places = this.getUsablePlaces();
+        this.routeResultSignature = '';
+        this.clearAllRoutes();
+        if (places.length >= 2) {
+            // 排序提交后立即显示当前顺序的轻量直线，旧详细路线不会继续留在画布上。
+            this.drawSimplePath(this.routePlanOptions?.roundTrip ? places.concat(places[0]) : places);
+        } else {
+            this.routeResults = new Map();
+            this.routeMetrics = new Map();
+            this.totalMetrics = PlannerData.createRouteMetrics(0, 0);
+            this.totalMetricSource = 'unavailable';
+            this.renderDistanceState();
+            return tokens;
+        }
+        this.routePipelineTimer = setTimeout(() => {
+            this.routePipelineTimer = null;
+            if (!this.areRouteTokensCurrent(tokens)) return;
+            this.startRoutePipeline(tokens, signature);
+        }, Math.max(0, Number(delayMs) || 0));
+        return tokens;
+    }
+
+    startRoutePipeline(tokens = this.beginRouteTokens(), signature = this.generateRoutePipelineSignature()) {
+        const promise = this.executeRoutePipeline(tokens, signature);
+        this.routeCalculationPromise = promise;
+        this.isCalculatingDistances = true;
+        promise.catch(error => {
+            if (error?.name !== 'AbortError' && error?.code !== 'BFF_ABORTED') {
+                console.warn('路线计算失败:', error);
+            }
+        }).finally(() => {
+            if (this.routeCalculationPromise === promise) {
+                this.routeCalculationPromise = null;
+                this.isCalculatingDistances = false;
+            }
+        });
+        return promise;
+    }
+
+    async executeRoutePipeline(tokens, signature) {
+        const segments = this.buildRoutePipelineSegments();
+        const provider = this.settings.selectedMapApi;
+        const travelMode = this.routePlanOptions?.travelMode || 'DRIVING';
+        const entries = await Promise.all(segments.map(async segment => {
+            let result;
+            try {
+                result = await this.routeResultProvider.get({
+                    provider,
+                    travelMode,
+                    origin: segment.from,
+                    destination: segment.to
+                }, { signal: tokens.route.signal });
+            } catch (error) {
+                if (error?.name === 'AbortError' || error?.code === 'BFF_ABORTED') throw error;
+                const distanceMeters = RouteOptimizer.haversineDistanceMeters(segment.from, segment.to);
+                result = {
+                    provider,
+                    travelMode,
+                    origin: { lat: segment.from.lat, lng: segment.from.lng },
+                    destination: { lat: segment.to.lat, lng: segment.to.lng },
+                    coordinates: [[segment.from.lng, segment.from.lat], [segment.to.lng, segment.to.lat]],
+                    distanceMeters,
+                    durationSeconds: RouteOptimizer.estimatedDurationSeconds(distanceMeters, travelMode),
+                    source: 'straight-line-estimate',
+                    algorithmVersion: PerformanceCore.ROUTE_ALGORITHM_VERSION
+                };
+            }
+            return [`${segment.from.id}-${segment.to.id}`, {
+                ...result,
+                fromId: segment.from.id,
+                toId: segment.to.id,
+                isReturn: segment.isReturn
+            }];
+        }));
+        if (!this.areRouteTokensCurrent(tokens)) return null;
+
+        let distanceMeters = 0;
+        let durationSeconds = 0;
+        let estimates = 0;
+        const metrics = entries.map(([key, result]) => {
+            const value = PlannerData.createRouteMetrics(result.distanceMeters, result.durationSeconds);
+            distanceMeters += value.distanceMeters;
+            durationSeconds += value.durationSeconds;
+            if (result.source !== 'provider') estimates += 1;
+            return [key, value];
+        });
+        const source = estimates === 0
+            ? (entries.length ? 'provider' : 'unavailable')
+            : (estimates === entries.length ? 'straight-line-estimate' : 'mixed');
+        this.dispatch({
+            type: 'ROUTE_RESULTS_RESOLVED',
+            tokens,
+            signature,
+            results: entries,
+            metrics,
+            totalMetrics: PlannerData.createRouteMetrics(distanceMeters, durationSeconds),
+            source
+        });
+        return entries;
+    }
+
+    async fetchProviderRouteResult(request, options = {}) {
+        const response = await this.bff.route({
+            provider: request.provider,
+            origin: request.origin,
+            destination: request.destination,
+            travelMode: request.travelMode
+        }, { signal: options.signal });
+        const payload = response?.data || response || {};
+        const coordinates = Array.isArray(payload.polyline)
+            ? payload.polyline.map(point => [Number(point?.lng), Number(point?.lat)])
+                .filter(point => Number.isFinite(point[0]) && Number.isFinite(point[1]))
+            : [];
+        return {
+            coordinates,
+            distanceMeters: Number(payload.distanceMeters),
+            durationSeconds: Number(payload.durationSeconds)
+        };
+    }
+
+    renderDistanceState() {
+        const metrics = this.totalMetrics || PlannerData.createRouteMetrics(0, 0);
+        this.updateDistanceSummary(metrics.distanceMeters, metrics.durationSeconds, this.totalMetricSource);
+    }
+
+    renderRouteResults(results) {
+        const places = this.getUsablePlaces();
+        if (!this.isMapLoaded || places.length < 2 || results.length === 0) {
+            this.clearAllRoutes();
+            return;
+        }
+        this.clearAllRoutes();
+        const provider = this.settings.selectedMapApi;
+        const colors = this.getTiandituRouteColors();
+        const tiandituLayers = [];
+        results.forEach((result, index) => {
+            const coordinates = result.coordinates;
+            if (provider === 'google' && typeof google !== 'undefined') {
+                const polyline = new google.maps.Polyline({
+                    path: coordinates.map(point => ({ lat: point[1], lng: point[0] })),
+                    geodesic: true,
+                    strokeColor: colors[index % colors.length],
+                    strokeOpacity: result.source === 'provider' ? 0.9 : 0.65,
+                    strokeWeight: result.source === 'provider' ? 6 : 4,
+                    zIndex: 100 + index
+                });
+                polyline.setMap(this.map);
+                this.polylines.push(polyline);
+            } else if (provider === 'gaode' && typeof AMap !== 'undefined') {
+                this.drawGaodeRouteSegment(coordinates, index);
+            } else if (provider === 'tianditu' && typeof T !== 'undefined') {
+                tiandituLayers.push({
+                    path: coordinates.map(point => new T.LngLat(point[0], point[1])),
+                    color: colors[index % colors.length],
+                    lineStyle: result.source === 'provider' ? 'solid' : 'dashed'
+                });
+            }
+        });
+        if (provider === 'tianditu' && tiandituLayers.length > 0) this.renderTiandituRouteLayers(tiandituLayers);
     }
 
     // 计算相邻地点距离
     calculateDistances() {
-        const activePlaces = this.travelList.filter(place => !place.isPending);
-
-        if (activePlaces.length < 2) {
-            this.updateDistanceSummary(0, 0);
-            return;
-        }
-
-        // 使用真实距离计算并更新总统计
-        this.calculateRealDistances();
+        return this.startRoutePipeline();
     }
 
-    // 计算真实距离（根据选择的地图API）
+    // 所有真实距离计算通过固定同源 route-matrix BFF 完成。
     calculateRealDistances() {
-        const selectedMapApi = this.settings.selectedMapApi;
-        console.log(`📏 使用${selectedMapApi} API计算距离`);
-
-        if (selectedMapApi === 'google' && this.distanceMatrixService) {
-            this.calculateRealDistancesWithGoogle();
-        } else if (selectedMapApi === 'gaode') {
-            this.calculateRealDistancesWithGaode();
-        } else if (selectedMapApi === 'tianditu') {
-            this.calculateRealDistancesWithTianditu();
-        } else {
-            console.warn('⚠️ 当前地图API不支持距离计算，使用直线距离');
-            this.calculateStraightLineDistances();
-        }
+        return this.calculateRealDistancesWithBff();
     }
 
-    // 使用Google Distance Matrix API计算真实距离
-    calculateRealDistancesWithGoogle() {
-        const activePlaces = this.travelList.filter(place => !place.isPending);
-
-        // 只处理有坐标的非空白地点
-        const nonBlankPlaces = activePlaces.filter(place => place.lat && place.lng && !place.isBlank);
-
-        let totalDistanceKm = 0;
-        let totalDurationMin = 0;
-        let completedCalculations = 0;
-        let totalCalculations = 0;
-
-        // 为每个地点寻找其前一个非空白地点，计算距离
-        for (let i = 0; i < activePlaces.length; i++) {
-            const currentPlace = activePlaces[i];
-
-            // 跳过空白地点或无坐标地点
-            if (!currentPlace.lat || !currentPlace.lng || currentPlace.isBlank) {
-                // 为空白地点或无坐标地点更新显示
-                const distanceElement = document.getElementById(`distance-${currentPlace.id}`);
-                const durationElement = document.getElementById(`duration-${currentPlace.id}`);
-
-                if (distanceElement) {
-                    distanceElement.textContent = currentPlace.isBlank ? '空白地点' : '无地理信息';
-                }
-                if (durationElement) {
-                    durationElement.textContent = '-';
-                }
-                continue;
-            }
-
-            // 寻找前一个非空白地点
-            let prevNonBlankPlace = null;
-            for (let j = i - 1; j >= 0; j--) {
-                if (activePlaces[j].lat && activePlaces[j].lng && !activePlaces[j].isBlank) {
-                    prevNonBlankPlace = activePlaces[j];
-                    break;
-                }
-            }
-
-            // 如果找到了前一个非空白地点，计算距离
-            if (prevNonBlankPlace) {
-                totalCalculations++;
-            }
-        }
-
-        if (totalCalculations === 0) {
-            this.updateDistanceSummary(0, 0);
-            return;
-        }
-
-        // 执行距离计算
-        for (let i = 0; i < activePlaces.length; i++) {
-            const currentPlace = activePlaces[i];
-
-            // 跳过空白地点或无坐标地点
-            if (!currentPlace.lat || !currentPlace.lng || currentPlace.isBlank) {
-                continue;
-            }
-
-            // 寻找前一个非空白地点
-            let prevNonBlankPlace = null;
-            for (let j = i - 1; j >= 0; j--) {
-                if (activePlaces[j].lat && activePlaces[j].lng && !activePlaces[j].isBlank) {
-                    prevNonBlankPlace = activePlaces[j];
-                    break;
-                }
-            }
-
-            // 如果找到了前一个非空白地点，计算距离
-            if (prevNonBlankPlace) {
-                this.distanceMatrixService.getDistanceMatrix({
-                    origins: [{ lat: prevNonBlankPlace.lat, lng: prevNonBlankPlace.lng }],
-                    destinations: [{ lat: currentPlace.lat, lng: currentPlace.lng }],
-                    travelMode: google.maps.TravelMode.DRIVING,
-                    unitSystem: google.maps.UnitSystem.METRIC,
-                    avoidHighways: false,
-                    avoidTolls: false
-                }, (response, status) => {
-                    completedCalculations++;
-
-                    if (status === 'OK' && response.rows[0].elements[0].status === 'OK') {
-                        const element = response.rows[0].elements[0];
-                        const distance = element.distance.text;
-                        const duration = element.duration.text;
-
-                        // 提取数值进行累计
-                        const distanceValue = element.distance.value / 1000; // 转换为公里
-                        const durationValue = element.duration.value / 60; // 转换为分钟
-
-                        totalDistanceKm += distanceValue;
-                        totalDurationMin += durationValue;
-
-                        // 更新界面显示
-                        const distanceElement = document.getElementById(`distance-${currentPlace.id}`);
-                        const durationElement = document.getElementById(`duration-${currentPlace.id}`);
-
-                        if (distanceElement) {
-                            distanceElement.textContent = distance;
-                        }
-                        if (durationElement) {
-                            durationElement.textContent = duration;
-                        }
-                    } else {
-                        // 如果API调用失败，使用直线距离
-                        const straightDistance = this.calculateStraightDistance(prevNonBlankPlace.lat, prevNonBlankPlace.lng, currentPlace.lat, currentPlace.lng);
-                        totalDistanceKm += straightDistance;
-                        totalDurationMin += (straightDistance / 50) * 60; // 假设50km/h
-
-                        const distanceElement = document.getElementById(`distance-${currentPlace.id}`);
-                        const durationElement = document.getElementById(`duration-${currentPlace.id}`);
-
-                        if (distanceElement) {
-                            distanceElement.textContent = `${straightDistance.toFixed(1)} 公里 (直线)`;
-                        }
-                        if (durationElement) {
-                            durationElement.textContent = `约${(straightDistance / 50 * 60).toFixed(0)} 分钟`;
-                        }
-                    }
-
-                    // 当所有计算完成时更新总计
-                    if (completedCalculations === totalCalculations) {
-                        this.updateDistanceSummary(totalDistanceKm, totalDurationMin / 60);
-                    }
-                });
-            }
-        }
-    }
-
-    // 使用高德地图Web服务API计算真实距离
-    async calculateRealDistancesWithGaode() {
-        const activePlaces = this.travelList.filter(place => !place.isPending);
-        const apiKey = this.getApiKey('gaode');
-
-        if (!apiKey) {
-            console.error('❌ 高德API密钥未配置，使用直线距离');
-            this.calculateStraightLineDistances();
-            return;
-        }
-
-        let totalDistanceKm = 0;
-        let totalDurationMin = 0;
-        let completedCalculations = 0;
-        let totalCalculations = 0;
-
-        // 统计需要计算的路段数
-        for (let i = 0; i < activePlaces.length; i++) {
-            const currentPlace = activePlaces[i];
-
-            if (!currentPlace.lat || !currentPlace.lng || currentPlace.isBlank) {
-                const distanceElement = document.getElementById(`distance-${currentPlace.id}`);
-                const durationElement = document.getElementById(`duration-${currentPlace.id}`);
-
-                if (distanceElement) {
-                    distanceElement.textContent = currentPlace.isBlank ? '空白地点' : '无地理信息';
-                }
-                if (durationElement) {
-                    durationElement.textContent = '-';
-                }
-                continue;
-            }
-
-            let prevNonBlankPlace = null;
-            for (let j = i - 1; j >= 0; j--) {
-                if (activePlaces[j].lat && activePlaces[j].lng && !activePlaces[j].isBlank) {
-                    prevNonBlankPlace = activePlaces[j];
-                    break;
-                }
-            }
-
-            if (prevNonBlankPlace) {
-                totalCalculations++;
-            }
-        }
-
-        if (totalCalculations === 0) {
-            this.updateDistanceSummary(0, 0);
-            return;
-        }
-
-        // 计算每个路段的距离
-        for (let i = 0; i < activePlaces.length; i++) {
-            const currentPlace = activePlaces[i];
-
-            if (!currentPlace.lat || !currentPlace.lng || currentPlace.isBlank) {
-                continue;
-            }
-
-            let prevNonBlankPlace = null;
-            for (let j = i - 1; j >= 0; j--) {
-                if (activePlaces[j].lat && activePlaces[j].lng && !activePlaces[j].isBlank) {
-                    prevNonBlankPlace = activePlaces[j];
-                    break;
-                }
-            }
-
-            if (prevNonBlankPlace) {
-                try {
-                    const result = await this.calculateGaodeDistance(prevNonBlankPlace, currentPlace, apiKey);
-                    completedCalculations++;
-
-                    if (result.success) {
-                        totalDistanceKm += result.distance;
-                        totalDurationMin += result.duration;
-
-                        const distanceElement = document.getElementById(`distance-${currentPlace.id}`);
-                        const durationElement = document.getElementById(`duration-${currentPlace.id}`);
-
-                        if (distanceElement) {
-                            distanceElement.textContent = `${result.distance.toFixed(1)} 公里`;
-                        }
-                        if (durationElement) {
-                            durationElement.textContent = `${Math.round(result.duration)} 分钟`;
-                        }
-                    } else {
-                        // API失败，使用直线距离
-                        const straightDistance = this.calculateStraightDistance(
-                            prevNonBlankPlace.lat, prevNonBlankPlace.lng,
-                            currentPlace.lat, currentPlace.lng
-                        );
-                        totalDistanceKm += straightDistance;
-                        totalDurationMin += (straightDistance / 50) * 60;
-
-                        const distanceElement = document.getElementById(`distance-${currentPlace.id}`);
-                        const durationElement = document.getElementById(`duration-${currentPlace.id}`);
-
-                        if (distanceElement) {
-                            distanceElement.textContent = `${straightDistance.toFixed(1)} 公里 (直线)`;
-                        }
-                        if (durationElement) {
-                            durationElement.textContent = `约${Math.round(straightDistance / 50 * 60)} 分钟`;
-                        }
-                    }
-
-                    // 当所有计算完成时更新总计
-                    if (completedCalculations === totalCalculations) {
-                        this.updateDistanceSummary(totalDistanceKm, totalDurationMin / 60);
-                    }
-                } catch (error) {
-                    console.error('❌ 高德距离计算出错:', error);
-                    completedCalculations++;
-
-                    // 使用直线距离作为备用
-                    const straightDistance = this.calculateStraightDistance(
-                        prevNonBlankPlace.lat, prevNonBlankPlace.lng,
-                        currentPlace.lat, currentPlace.lng
-                    );
-                    totalDistanceKm += straightDistance;
-                    totalDurationMin += (straightDistance / 50) * 60;
-
-                    const distanceElement = document.getElementById(`distance-${currentPlace.id}`);
-                    const durationElement = document.getElementById(`duration-${currentPlace.id}`);
-
-                    if (distanceElement) {
-                        distanceElement.textContent = `${straightDistance.toFixed(1)} 公里 (直线)`;
-                    }
-                    if (durationElement) {
-                        durationElement.textContent = `约${Math.round(straightDistance / 50 * 60)} 分钟`;
-                    }
-
-                    if (completedCalculations === totalCalculations) {
-                        this.updateDistanceSummary(totalDistanceKm, totalDurationMin / 60);
-                    }
-                }
-            }
-        }
-    }
-
-    // 使用高德API计算两点间距离（带缓存优化）
-    async calculateGaodeDistance(fromPlace, toPlace, apiKey) {
-        // 检查缓存
-        const cachedDistance = this.getCachedDistance(fromPlace, toPlace);
-        if (cachedDistance) {
-            return {
-                success: true,
-                distance: cachedDistance.distance,
-                duration: cachedDistance.duration
-            };
-        }
-
-        try {
-            const url = 'https://restapi.amap.com/v3/direction/driving';
-            const params = new URLSearchParams({
-                key: apiKey,
-                origin: `${fromPlace.lng},${fromPlace.lat}`,
-                destination: `${toPlace.lng},${toPlace.lat}`,
-                extensions: 'base'
+    async calculateRealDistancesWithBff() {
+        if (this.taskGenerations && this.routeResultProvider) return this.startRoutePipeline();
+        const activePlaces = this.getUsablePlaces();
+        let totalDistanceMeters = 0;
+        let totalDurationSeconds = 0;
+        let straightLineSegments = 0;
+        this.routeMetrics.clear();
+        const travelMode = this.routePlanOptions?.travelMode || 'DRIVING';
+        const segments = PlannerData.buildValidSegments(activePlaces)
+            .map(([from, to]) => ({ from, to, isReturn: false }));
+        if (this.routePlanOptions?.roundTrip && activePlaces.length > 1) {
+            segments.push({
+                from: activePlaces[activePlaces.length - 1],
+                to: activePlaces[0],
+                isReturn: true
             });
+        }
 
-            const response = await fetch(`${url}?${params.toString()}`);
-
-            if (!response.ok) {
-                throw new Error(`HTTP错误: ${response.status}`);
-            }
-
-            const data = await response.json();
-
-            if (data.status === '1' && data.route && data.route.paths && data.route.paths.length > 0) {
-                const path = data.route.paths[0];
-                const distance = parseFloat(path.distance) / 1000; // 转换为公里
-                const duration = parseFloat(path.duration) / 60;   // 转换为分钟
-
-                // 缓存结果
-                this.cacheDistance(fromPlace, toPlace, distance, duration);
-
-                return {
-                    success: true,
-                    distance: distance,
-                    duration: duration
-                };
+        for (const segment of segments) {
+            const previous = segment.from;
+            const current = segment.to;
+            const result = await this.calculateBffDistance(previous, current, travelMode);
+            let metrics;
+            let isStraightLine = false;
+            if (result.success) {
+                metrics = PlannerData.createRouteMetrics(result.distanceMeters, result.durationSeconds);
             } else {
-                console.warn('⚠️ 高德路径规划API返回错误:', data.info);
-                return { success: false };
-            }
-        } catch (error) {
-            console.error('❌ 调用高德路径规划API失败:', error);
-            return { success: false };
-        }
-    }
-
-    // 使用天地图路线服务计算距离
-    async calculateRealDistancesWithTianditu() {
-        const activePlaces = this.travelList.filter(place => !place.isPending);
-        const apiKey = this.getApiKey('tianditu');
-
-        if (!apiKey) {
-            console.error('❌ 天地图API密钥未配置，使用直线距离');
-            this.calculateStraightLineDistances();
-            return;
-        }
-
-        let totalDistanceKm = 0;
-        let totalDurationMin = 0;
-        let completedCalculations = 0;
-        let totalCalculations = 0;
-
-        for (let i = 0; i < activePlaces.length; i++) {
-            const currentPlace = activePlaces[i];
-
-            if (!currentPlace.lat || !currentPlace.lng || currentPlace.isBlank) {
-                const distanceElement = document.getElementById(`distance-${currentPlace.id}`);
-                const durationElement = document.getElementById(`duration-${currentPlace.id}`);
-
-                if (distanceElement) {
-                    distanceElement.textContent = currentPlace.isBlank ? '空白地点' : '无地理信息';
-                }
-                if (durationElement) {
-                    durationElement.textContent = '-';
-                }
-                continue;
-            }
-
-            let prevNonBlankPlace = null;
-            for (let j = i - 1; j >= 0; j--) {
-                if (activePlaces[j].lat && activePlaces[j].lng && !activePlaces[j].isBlank) {
-                    prevNonBlankPlace = activePlaces[j];
-                    break;
-                }
-            }
-
-            if (prevNonBlankPlace) {
-                totalCalculations++;
-            }
-        }
-
-        if (totalCalculations === 0) {
-            this.updateDistanceSummary(0, 0);
-            return;
-        }
-
-        for (let i = 0; i < activePlaces.length; i++) {
-            const currentPlace = activePlaces[i];
-
-            if (!currentPlace.lat || !currentPlace.lng || currentPlace.isBlank) {
-                continue;
-            }
-
-            let prevNonBlankPlace = null;
-            for (let j = i - 1; j >= 0; j--) {
-                if (activePlaces[j].lat && activePlaces[j].lng && !activePlaces[j].isBlank) {
-                    prevNonBlankPlace = activePlaces[j];
-                    break;
-                }
-            }
-
-            if (!prevNonBlankPlace) {
-                continue;
-            }
-
-            try {
-                const result = await this.calculateTiandituDistance(prevNonBlankPlace, currentPlace, apiKey);
-                completedCalculations++;
-
-                if (result.success) {
-                    totalDistanceKm += result.distance;
-                    totalDurationMin += result.duration;
-
-                    const distanceElement = document.getElementById(`distance-${currentPlace.id}`);
-                    const durationElement = document.getElementById(`duration-${currentPlace.id}`);
-
-                    if (distanceElement) {
-                        distanceElement.textContent = `${result.distance.toFixed(1)} 公里`;
-                    }
-                    if (durationElement) {
-                        durationElement.textContent = `${Math.round(result.duration)} 分钟`;
-                    }
-                } else {
-                    const straightDistance = this.calculateStraightDistance(
-                        prevNonBlankPlace.lat, prevNonBlankPlace.lng,
-                        currentPlace.lat, currentPlace.lng
-                    );
-                    totalDistanceKm += straightDistance;
-                    totalDurationMin += (straightDistance / 50) * 60;
-
-                    const distanceElement = document.getElementById(`distance-${currentPlace.id}`);
-                    const durationElement = document.getElementById(`duration-${currentPlace.id}`);
-
-                    if (distanceElement) {
-                        distanceElement.textContent = `${straightDistance.toFixed(1)} 公里 (直线)`;
-                    }
-                    if (durationElement) {
-                        durationElement.textContent = `约${Math.round(straightDistance / 50 * 60)} 分钟`;
-                    }
-                }
-
-                if (completedCalculations === totalCalculations) {
-                    this.updateDistanceSummary(totalDistanceKm, totalDurationMin / 60);
-                }
-            } catch (error) {
-                console.error('❌ 天地图距离计算出错:', error);
-                completedCalculations++;
-
-                const straightDistance = this.calculateStraightDistance(
-                    prevNonBlankPlace.lat, prevNonBlankPlace.lng,
-                    currentPlace.lat, currentPlace.lng
+                const straightDistanceMeters = RouteOptimizer.haversineDistanceMeters(previous, current);
+                metrics = PlannerData.createRouteMetrics(
+                    straightDistanceMeters,
+                    RouteOptimizer.estimatedDurationSeconds(straightDistanceMeters, travelMode)
                 );
-                totalDistanceKm += straightDistance;
-                totalDurationMin += (straightDistance / 50) * 60;
+                isStraightLine = true;
+                straightLineSegments += 1;
+            }
+            this.routeMetrics.set(`${previous.id}-${current.id}`, metrics);
+            totalDistanceMeters += metrics.distanceMeters;
+            totalDurationSeconds += metrics.durationSeconds;
 
-                const distanceElement = document.getElementById(`distance-${currentPlace.id}`);
-                const durationElement = document.getElementById(`duration-${currentPlace.id}`);
-
-                if (distanceElement) {
-                    distanceElement.textContent = `${straightDistance.toFixed(1)} 公里 (直线)`;
-                }
-                if (durationElement) {
-                    durationElement.textContent = `约${Math.round(straightDistance / 50 * 60)} 分钟`;
-                }
-
-                if (completedCalculations === totalCalculations) {
-                    this.updateDistanceSummary(totalDistanceKm, totalDurationMin / 60);
-                }
+            if (segment.isReturn) continue;
+            const distanceElement = document.getElementById(`distance-${current.id}`);
+            const durationElement = document.getElementById(`duration-${current.id}`);
+            if (distanceElement) {
+                const suffix = isStraightLine ? ' (直线估算)' : '';
+                distanceElement.textContent = `${(metrics.distanceMeters / 1000).toFixed(1)} 公里${suffix}`;
+            }
+            if (durationElement) {
+                const prefix = isStraightLine ? '约' : '';
+                durationElement.textContent = `${prefix}${Math.round(metrics.durationSeconds / 60)} 分钟`;
             }
         }
+
+        const source = straightLineSegments === 0
+            ? 'provider'
+            : (straightLineSegments === segments.length ? 'straight-line-estimate' : 'mixed');
+        this.updateDistanceSummary(totalDistanceMeters, totalDurationSeconds, source);
     }
 
-    async calculateTiandituDistance(fromPlace, toPlace, apiKey) {
-        const cachedDistance = this.getCachedDistance(fromPlace, toPlace);
-        if (cachedDistance) {
-            return {
-                success: true,
-                distance: cachedDistance.distance,
-                duration: cachedDistance.duration
-            };
+    calculateRealDistancesWithGoogle() {
+        return this.calculateRealDistancesWithBff();
+    }
+
+    calculateRealDistancesWithGaode() {
+        return this.calculateRealDistancesWithBff();
+    }
+
+    calculateRealDistancesWithTianditu() {
+        return this.calculateRealDistancesWithBff();
+    }
+
+    async calculateBffDistance(fromPlace, toPlace, travelMode = 'DRIVING') {
+        if (!PlannerData.isUsablePlace(fromPlace) || !PlannerData.isUsablePlace(toPlace)) {
+            return { success: false };
         }
-
         try {
-            const routeResult = await this.getTiandituRoute(fromPlace, toPlace, apiKey);
-            if (!routeResult || !routeResult.success) {
-                return { success: false };
-            }
-
-            const distance = routeResult.distance;
-            const duration = routeResult.duration;
-            this.cacheDistance(fromPlace, toPlace, distance, duration);
-
+            const result = await this.routeResultProvider.get({
+                provider: this.settings.selectedMapApi,
+                origin: fromPlace,
+                destination: toPlace,
+                travelMode
+            });
             return {
                 success: true,
-                distance,
-                duration
+                distanceMeters: result.distanceMeters,
+                durationSeconds: result.durationSeconds,
+                coordinates: result.coordinates
             };
         } catch (error) {
-            console.error('❌ 调用天地图路径规划API失败:', error);
             return { success: false };
         }
     }
 
+    calculateGaodeDistance(fromPlace, toPlace) {
+        return this.calculateBffDistance(fromPlace, toPlace);
+    }
+
+    calculateTiandituDistance(fromPlace, toPlace) {
+        return this.calculateBffDistance(fromPlace, toPlace);
+    }
     // 计算直线距离（备用方案）
     calculateStraightLineDistances() {
-        let totalDistance = 0;
+        const usablePlaces = this.getUsablePlaces();
+        let totalDistanceMeters = 0;
+        let totalDurationSeconds = 0;
+        this.routeMetrics.clear();
 
-        for (let i = 1; i < this.travelList.length; i++) {
-            const prev = this.travelList[i - 1];
-            const curr = this.travelList[i];
+        for (let i = 1; i < usablePlaces.length; i++) {
+            const prev = usablePlaces[i - 1];
+            const curr = usablePlaces[i];
 
-            const distance = this.calculateStraightDistance(prev.lat, prev.lng, curr.lat, curr.lng);
-            totalDistance += distance;
+            const distanceKm = this.calculateStraightDistance(prev.lat, prev.lng, curr.lat, curr.lng);
+            const metrics = PlannerData.createRouteMetrics(distanceKm * 1000, (distanceKm / 50) * 3600);
+            this.routeMetrics.set(`${prev.id}-${curr.id}`, metrics);
+            totalDistanceMeters += metrics.distanceMeters;
+            totalDurationSeconds += metrics.durationSeconds;
 
             // 更新距离显示
             const distanceElement = document.getElementById(`distance-${curr.id}`);
             const durationElement = document.getElementById(`duration-${curr.id}`);
 
             if (distanceElement) {
-                distanceElement.textContent = `${distance.toFixed(1)} 公里 (直线)`;
+                distanceElement.textContent = `${distanceKm.toFixed(1)} 公里 (直线估算)`;
             }
             if (durationElement) {
-                durationElement.textContent = `约${(distance / 50 * 60).toFixed(0)} 分钟`;
+                durationElement.textContent = `约${Math.round(metrics.durationSeconds / 60)} 分钟`;
             }
         }
 
-        const estimatedTime = totalDistance / 50; // 假设平均速度50km/h
-        this.updateDistanceSummary(totalDistance, estimatedTime);
+        this.updateDistanceSummary(totalDistanceMeters, totalDurationSeconds, 'straight-line-estimate');
     }
 
     // 计算两点间直线距离（使用Haversine公式）
@@ -4037,12 +4226,15 @@ class TravelPlanner {
     }
 
     // 更新距离统计
-    updateDistanceSummary(distance, time) {
-        document.getElementById('totalDistance').textContent = `总距离: ${distance.toFixed(1)} 公里`;
+    updateDistanceSummary(distanceMeters, durationSeconds, source = 'unavailable') {
+        this.totalMetrics = PlannerData.createRouteMetrics(distanceMeters, durationSeconds);
+        this.totalMetricSource = source;
+        document.getElementById('totalDistance').textContent = `总距离: ${(distanceMeters / 1000).toFixed(1)} 公里`;
 
         // 将时间转换为更友好的格式
-        const hours = Math.floor(time);
-        const minutes = Math.round((time - hours) * 60);
+        const totalMinutes = Math.round(durationSeconds / 60);
+        const hours = Math.floor(totalMinutes / 60);
+        const minutes = totalMinutes % 60;
 
         let timeText = '';
         if (hours > 0) {
@@ -4055,6 +4247,17 @@ class TravelPlanner {
         }
 
         document.getElementById('estimatedTime').textContent = `预计时间: ${timeText}`;
+        const sourceElement = document.getElementById('distanceSource');
+        if (sourceElement) {
+            const labels = {
+                provider: '数据来源: Provider 交通路线',
+                mixed: '数据来源: Provider + 直线估算',
+                'straight-line-estimate': '数据来源: 直线估算',
+                unavailable: '数据来源: 尚未计算'
+            };
+            const returnSuffix = this.routePlanOptions?.roundTrip ? ' · 含返程' : '';
+            sourceElement.textContent = `${labels[source] || labels.unavailable}${returnSuffix}`;
+        }
     }
 
     // 添加地图标记
@@ -4067,7 +4270,7 @@ class TravelPlanner {
         }
 
         // 如果没有坐标信息，不创建标记
-        if (!place.lat || !place.lng) {
+        if (!PlannerData.isValidCoordinate(place)) {
             return;
         }
 
@@ -4078,7 +4281,7 @@ class TravelPlanner {
 
         // 获取非空白游玩点在激活列表中的序号
         const activePlaces = this.travelList.filter(p => !p.isPending);
-        const nonBlankActivePlaces = activePlaces.filter(p => !p.isBlank && p.lat && p.lng);
+        const nonBlankActivePlaces = this.getUsablePlaces(activePlaces);
         const index = nonBlankActivePlaces.findIndex(p => p.id === place.id);
         const number = index + 1;
 
@@ -4131,18 +4334,9 @@ class TravelPlanner {
             map: this.map,
             title: `${number}. ${displayName}`,
             icon: {
-                url: 'data:image/svg+xml;charset=UTF-8,' + encodeURIComponent(`
-                    <svg width="40" height="50" viewBox="0 0 40 50" fill="none" xmlns="http://www.w3.org/2000/svg">
-                        <!-- 外层阴影 -->
-                        <ellipse cx="20" cy="47" rx="8" ry="3" fill="rgba(0,0,0,0.3)"/>
-                        <!-- 主要标记 -->
-                        <path d="M20 3C13.4 3 8 8.4 8 15C8 24.75 20 47 20 47C20 47 32 24.75 32 15C32 8.4 26.6 3 20 3Z" fill="#e74c3c" stroke="#ffffff" stroke-width="2"/>
-                        <!-- 内圆 -->
-                        <circle cx="20" cy="15" r="6" fill="#ffffff"/>
-                        <!-- 编号文字 -->
-                        <text x="20" y="19" text-anchor="middle" font-family="Arial" font-size="8" font-weight="bold" fill="#e74c3c">${number}</text>
-                    </svg>
-                `),
+                url: 'data:image/svg+xml;charset=UTF-8,' + encodeURIComponent(
+                    Security.renderMapMarkerSvg({ number, pending: false })
+                ),
                 scaledSize: new google.maps.Size(40, 50),
                 anchor: new google.maps.Point(20, 50)
             },
@@ -4152,33 +4346,10 @@ class TravelPlanner {
 
     // 创建高德地图标记
     createGaodeMarker(place, number, displayName, index) {
-        // 使用SVG创建标记，与Google Maps保持一致的视觉效果
-        const markerSvg = `
-            <svg width="40" height="50" viewBox="0 0 40 50" xmlns="http://www.w3.org/2000/svg">
-                <!-- 阴影 -->
-                <ellipse cx="20" cy="47" rx="8" ry="3" fill="rgba(0,0,0,0.3)"/>
-                <!-- 主要标记 -->
-                <path d="M20 3C13.4 3 8 8.4 8 15C8 24.75 20 47 20 47C20 47 32 24.75 32 15C32 8.4 26.6 3 20 3Z" fill="#e74c3c" stroke="#ffffff" stroke-width="2"/>
-                <!-- 内圆 -->
-                <circle cx="20" cy="15" r="6" fill="#ffffff"/>
-                <!-- 编号文字 -->
-                <text x="20" y="19" text-anchor="middle" font-family="Arial, sans-serif" font-size="12" font-weight="bold" fill="#e74c3c">${number}</text>
-            </svg>
-        `;
-
         const marker = new AMap.Marker({
             position: [place.lng, place.lat], // 高德地图使用 [经度, 纬度] 格式
             title: `${number}. ${displayName}`,
-            content: `
-                <div style="
-                    position: relative;
-                    width: 40px;
-                    height: 50px;
-                    cursor: pointer;
-                ">
-                    ${markerSvg}
-                </div>
-            `,
+            content: Security.renderMapSdkHtml('active-marker', { number }),
             anchor: 'bottom-center',
             zIndex: 1000 + index
         });
@@ -4212,41 +4383,7 @@ class TravelPlanner {
         const labelMarker = new AMap.Marker({
             position: [place.lng, place.lat],
             offset: new AMap.Pixel(0, -75),
-            content: `
-                <div style="
-                    position: absolute;
-                    background: linear-gradient(135deg, rgba(255,255,255,0.95) 0%, rgba(248,250,252,0.97) 100%);
-                    border: 1px solid rgba(255,255,255,0.9);
-                    border-radius: 8px;
-                    padding: 6px 10px;
-                    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-                    font-size: 12px;
-                    font-weight: 600;
-                    color: #2c3e50;
-                    white-space: nowrap;
-                    box-shadow: 0 4px 12px rgba(0,0,0,0.15), 0 2px 4px rgba(0,0,0,0.1);
-                    backdrop-filter: blur(8px);
-                    text-shadow: 0 1px 2px rgba(255,255,255,0.8);
-                    min-width: 60px;
-                    text-align: center;
-                    cursor: default;
-                    user-select: none;
-                    z-index: 1000;
-                    left: 50%;
-                    transform: translateX(-50%);
-                    pointer-events: none;
-                 transition: transform 0.3s ease;
-                ">
-                    <span style="
-                        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-                        -webkit-background-clip: text;
-                        -webkit-text-fill-color: transparent;
-                        background-clip: text;
-                        font-weight: 800;
-                        margin-right: 4px;
-                    ">${number}.</span><span>${displayName}</span>
-                </div>
-            `,
+            content: Security.renderMapSdkHtml('active-label', { number, text: displayName }),
             anchor: 'bottom-center',
             zIndex: 1100,
             clickable: false
@@ -4265,14 +4402,7 @@ class TravelPlanner {
     }
 
     createTiandituMarker(place, number, displayName, index) {
-        const markerSvg = `
-            <svg width="40" height="50" viewBox="0 0 40 50" xmlns="http://www.w3.org/2000/svg">
-                <ellipse cx="20" cy="47" rx="8" ry="3" fill="rgba(0,0,0,0.3)"/>
-                <path d="M20 3C13.4 3 8 8.4 8 15C8 24.75 20 47 20 47C20 47 32 24.75 32 15C32 8.4 26.6 3 20 3Z" fill="#e74c3c" stroke="#ffffff" stroke-width="2"/>
-                <circle cx="20" cy="15" r="6" fill="#ffffff"/>
-                <text x="20" y="19" text-anchor="middle" font-family="Arial, sans-serif" font-size="12" font-weight="bold" fill="#e74c3c">${number}</text>
-            </svg>
-        `;
+        const markerSvg = Security.renderMapMarkerSvg({ number, pending: false });
 
         const icon = new T.Icon({
             iconUrl: 'data:image/svg+xml;charset=UTF-8,' + encodeURIComponent(markerSvg.trim()),
@@ -4309,33 +4439,7 @@ class TravelPlanner {
 
     // 创建天地图标签
     createTiandituLabel(place, number, displayName) {
-        const labelText = `
-                <div style="
-                    background: linear-gradient(135deg, rgba(255,255,255,0.95) 0%, rgba(248,250,252,0.97) 100%);
-                    border: 1px solid rgba(255,255,255,0.9);
-                    border-radius: 8px;
-                    padding: 6px 10px;
-                    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-                    font-size: 12px;
-                    font-weight: 600;
-                    color: #2c3e50;
-                    white-space: nowrap;
-                    box-shadow: 0 4px 12px rgba(0,0,0,0.15), 0 2px 4px rgba(0,0,0,0.1);
-                    backdrop-filter: blur(8px);
-                    text-shadow: 0 1px 2px rgba(255,255,255,0.8);
-                    text-align: center;
-                    cursor: default;
-                    user-select: none;
-                ">
-                    <span style="
-                        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-                        -webkit-background-clip: text;
-                        -webkit-text-fill-color: transparent;
-                        background-clip: text;
-                        font-weight: 800;
-                        margin-right: 4px;
-                    ">${number}.</span><span>${displayName}</span>
-                </div>`;
+        const labelText = Security.renderMapSdkHtml('active-label', { number, text: displayName });
 
         const label = new T.Label({
             text: labelText,
@@ -4402,6 +4506,8 @@ class TravelPlanner {
             }
             this.placeLabels.splice(labelIndex, 1);
         }
+        this.labelSizeCache?.delete(id);
+        this.labelSizeCache?.delete(String(id));
     }
 
     // 清除所有标记
@@ -4435,6 +4541,7 @@ class TravelPlanner {
             }
         });
         this.placeLabels = [];
+        this.labelSizeCache.clear();
 
         // 清除待定点标记
         this.clearPendingMarkers();
@@ -4447,7 +4554,7 @@ class TravelPlanner {
         // 重置城市过滤
         this.currentCityFilter = 'all';
         if (this.cityFilterBtn) {
-            this.cityFilterBtn.innerHTML = '🏙️ 全部城市';
+            this.cityFilterBtn.textContent = '🏙️ 全部城市';
             this.cityFilterBtn.style.display = 'none';
         }
 
@@ -4464,19 +4571,20 @@ class TravelPlanner {
         if (this.markersCleared) {
             // 恢复标记
             this.restoreMarkers();
-            clearBtn.innerHTML = '🗑️ 清除标记';
+            clearBtn.textContent = '🗑️ 清除标记';
             clearBtn.title = '清除地图标记';
-            const activeCount = this.travelList.filter(place => !place.isPending && place.lat && place.lng && !place.isBlank).length;
+            const activeCount = this.getUsablePlaces().length;
             this.showToast(`已恢复标记并调整视角显示${activeCount}个游玩点`);
         } else {
             // 清除标记
             this.saveMarkersState();
             this.clearMarkersOnly();
-            clearBtn.innerHTML = '↩️ 恢复标记';
+            clearBtn.textContent = '↩️ 恢复标记';
             clearBtn.title = '恢复地图标记';
             this.showToast('已清除标记');
         }
         this.markersCleared = !this.markersCleared;
+        clearBtn.setAttribute('aria-pressed', String(!this.markersCleared));
     }
 
     // 保存标记状态
@@ -4515,6 +4623,7 @@ class TravelPlanner {
             }
         });
         this.placeLabels = [];
+        this.labelSizeCache.clear();
 
         // 清除待定点标记
         this.clearPendingMarkers();
@@ -4564,7 +4673,7 @@ class TravelPlanner {
         }
 
         // 重新适配地图视野，只显示游玩点区域
-        const currentActivePlaces = this.travelList.filter(place => !place.isPending && place.lat && place.lng && !place.isBlank);
+        const currentActivePlaces = this.getUsablePlaces();
         if (currentActivePlaces.length > 0) {
             setTimeout(() => {
                 this.fitMapToPlaces(currentActivePlaces);
@@ -4575,7 +4684,7 @@ class TravelPlanner {
 
     // 显示路线功能（优化版）
     showRoute() {
-        const activePlaces = this.travelList.filter(place => !place.isPending && !place.isBlank && place.lat && place.lng);
+        const activePlaces = this.getUsablePlaces();
 
         if (activePlaces.length < 2) {
             this.showToast('至少需要2个有效地点才能显示路线');
@@ -4588,7 +4697,7 @@ class TravelPlanner {
         if (this.markersCleared) {
             this.restoreMarkers();
             const clearBtn = document.getElementById('clearMarkersBtn');
-            clearBtn.innerHTML = '🗑️ 清除标记';
+            clearBtn.textContent = '🗑️ 清除标记';
             clearBtn.title = '清除地图标记';
             this.markersCleared = false;
         }
@@ -4626,38 +4735,16 @@ class TravelPlanner {
 
     // 绘制路线
     drawRoute() {
-        // 只处理激活状态且非空白的地点
-        const activePlaces = this.travelList.filter(place => !place.isPending && !place.isBlank && place.lat && place.lng);
-
+        const activePlaces = this.getUsablePlaces();
         if (!this.isMapLoaded || activePlaces.length < 2) {
             this.clearAllRoutes();
             return;
         }
-
-        const selectedMapApi = this.settings.selectedMapApi;
-        console.log(`🛣️ 使用${selectedMapApi}绘制路线`);
-
-        if (selectedMapApi === 'google' && typeof google !== 'undefined') {
-            this.drawGoogleRoute(activePlaces);
-        } else if (selectedMapApi === 'gaode') {
-            // 高德路线规划使用Web服务API，但绘制需要AMap对象
-            if (typeof AMap !== 'undefined') {
-                this.drawGaodeRoute(activePlaces);
-            } else {
-                console.warn('⚠️ AMap对象未加载，无法绘制高德地图路线');
-                this.drawSimplePath(activePlaces);
-            }
-        } else if (selectedMapApi === 'tianditu') {
-            if (typeof T !== 'undefined') {
-                this.drawTiandituRoute(activePlaces);
-            } else {
-                console.warn('⚠️ T对象未加载，无法绘制天地图路线');
-                this.drawSimplePath(activePlaces);
-            }
-        } else {
-            console.warn('⚠️ 当前地图API不支持路线绘制，使用简单连线');
-            this.drawSimplePath(activePlaces);
+        if (this.routeResultSignature === this.generateRoutePipelineSignature() && this.routeResults.size > 0) {
+            this.renderRouteResults(Array.from(this.routeResults.values()));
+            return;
         }
+        this.scheduleRoutePipeline(0);
     }
 
     // 清除所有路线
@@ -4694,211 +4781,89 @@ class TravelPlanner {
 
     // Google Maps路线绘制
     drawGoogleRoute(activePlaces) {
-        // 清除现有路线
-        if (this.directionsRenderer) {
-            this.directionsRenderer.setDirections({ routes: [] });
-        }
-        if (this.polyline) {
-            this.polyline.setMap(null);
-            this.polyline = null;
-        }
-        // 清除多彩路线段
-        if (this.polylines) {
-            this.polylines.forEach(polyline => polyline.setMap(null));
-            this.polylines = [];
-        }
-
-        // 如果有两个以上激活地点，尝试使用 Directions API
-        if (activePlaces.length >= 2 && this.directionsService) {
-            // 创建路线点
-            const waypoints = activePlaces.slice(1, -1).map(place => ({
-                location: { lat: place.lat, lng: place.lng },
-                stopover: true
-            }));
-
-            const request = {
-                origin: { lat: activePlaces[0].lat, lng: activePlaces[0].lng },
-                destination: {
-                    lat: activePlaces[activePlaces.length - 1].lat,
-                    lng: activePlaces[activePlaces.length - 1].lng
-                },
-                waypoints: waypoints,
-                travelMode: google.maps.TravelMode.DRIVING,
-                optimizeWaypoints: false // 保持用户指定的顺序
-            };
-
-            this.directionsService.route(request, (result, status) => {
-                if (status === 'OK') {
-                    this.directionsRenderer.setDirections(result);
-                    console.log('✅ 使用Google Directions API绘制路线');
-                } else {
-                    console.log('⚠️ Google Directions API失败，使用多彩连线:', status);
-                    // 如果路线规划失败，绘制多彩连线
-                    this.drawGoogleSimplePath(activePlaces);
-                }
-            });
-        } else {
-            // 只有两个地点时，直接绘制多彩连线
-            this.drawGoogleSimplePath(activePlaces);
-        }
+        this.scheduleRoutePipeline(0);
     }
 
     // 高德地图路线绘制
     drawGaodeRoute(activePlaces) {
-        // 清除现有路线
-        if (this.polylines) {
-            this.polylines.forEach(polyline => this.map.remove(polyline));
-            this.polylines = [];
-        }
-
-        const apiKey = this.getApiKey('gaode');
-        if (!apiKey) {
-            console.warn('⚠️ 高德API密钥未配置，使用简单连线');
-            this.drawGaodeSimplePath(activePlaces);
-            return;
-        }
-
-        // 尝试使用高德路径规划API
-        console.log('🛣️ 使用高德路径规划API绘制路线');
-        this.drawGaodeRoutesWithAPI(activePlaces, apiKey);
+        this.scheduleRoutePipeline(0);
     }
 
     // 使用高德路径规划API绘制路线（快速版本）
-    async drawGaodeRoutesWithAPI(activePlaces, apiKey) {
-        try {
-            this.polylines = this.polylines || [];
-            console.log(`🛣️ 开始快速绘制${activePlaces.length - 1}段路线`);
-
-            // 先立即绘制简单连线（快速显示）
-            this.drawGaodeSimplePath(activePlaces);
-            console.log('✅ 已显示简单路线，正在获取详细路径...');
-
-            // 然后异步获取并替换为详细路径
-            this.drawDetailedGaodeRoutes(activePlaces, apiKey);
-
-        } catch (error) {
-            console.error('❌ 高德路径规划出错:', error);
-            // 回退到简单路径
-            this.drawGaodeSimplePath(activePlaces);
-        }
+    async drawGaodeRoutesWithAPI(activePlaces) {
+        return this.drawDetailedRoutesWithBff(activePlaces, 'gaode');
     }
 
     // 异步绘制详细路线（后台处理）
-    async drawDetailedGaodeRoutes(activePlaces, apiKey) {
-        try {
-            const routePromises = [];
-
-            // 批量发起所有路径规划请求
-            for (let i = 0; i < activePlaces.length - 1; i++) {
-                const origin = activePlaces[i];
-                const destination = activePlaces[i + 1];
-
-                routePromises.push(
-                    this.getGaodeRoute(origin, destination, apiKey)
-                        .then(routeData => ({ index: i, routeData, origin, destination }))
-                        .catch(error => ({ index: i, error, origin, destination }))
-                );
-            }
-
-            console.log(`🔄 正在批量获取${routePromises.length}段详细路径...`);
-
-            // 等待所有路径规划完成
-            const results = await Promise.all(routePromises);
-
-            // 清除简单路线
-            if (this.polylines) {
-                this.polylines.forEach(polyline => this.map.remove(polyline));
-                this.polylines = [];
-            }
-
-            // 绘制详细路线
-            let successCount = 0;
-            results.forEach(result => {
-                if (result.error) {
-                    console.warn(`⚠️ 路径${result.index + 1}规划失败，使用直线: ${result.origin.name} -> ${result.destination.name}`);
-                    this.drawGaodeDirectLine(result.origin, result.destination, result.index);
-                } else if (result.routeData.success) {
-                    this.drawGaodeRouteSegment(result.routeData.coordinates, result.index);
-                    successCount++;
-                } else {
-                    console.warn(`⚠️ 路径${result.index + 1}规划失败，使用直线: ${result.origin.name} -> ${result.destination.name}`);
-                    this.drawGaodeDirectLine(result.origin, result.destination, result.index);
-                }
-            });
-
-            console.log(`✅ 详细路线绘制完成，成功: ${successCount}/${results.length}`);
-
-        } catch (error) {
-            console.error('❌ 批量路径规划失败:', error);
-        }
+    async drawDetailedGaodeRoutes(activePlaces) {
+        return this.drawDetailedRoutesWithBff(activePlaces, 'gaode');
     }
 
     // 获取高德路径规划数据（带缓存优化）
-    async getGaodeRoute(origin, destination, apiKey) {
-        // 检查路线缓存
-        const cachedRoute = this.getCachedRoute(origin, destination);
-        if (cachedRoute) {
-            return {
-                success: true,
-                coordinates: cachedRoute.coordinates,
-                distance: cachedRoute.distance,
-                duration: cachedRoute.duration
-            };
-        }
+    async getGaodeRoute(origin, destination) {
+        return this.getBffRoute(origin, destination, 'gaode');
+    }
 
-        try {
-            const url = 'https://restapi.amap.com/v3/direction/driving';
-            const params = new URLSearchParams({
-                key: apiKey,
-                origin: `${origin.lng},${origin.lat}`,
-                destination: `${destination.lng},${destination.lat}`,
-                extensions: 'all'  // 获取详细路径信息
-            });
-
-            const response = await fetch(`${url}?${params.toString()}`);
-
-            if (!response.ok) {
-                throw new Error(`HTTP错误: ${response.status}`);
-            }
-
-            const data = await response.json();
-
-            if (data.status === '1' && data.route && data.route.paths && data.route.paths.length > 0) {
-                const path = data.route.paths[0];
-
-                // 解析路径坐标
-                const coordinates = [];
-                if (path.steps && path.steps.length > 0) {
-                    path.steps.forEach(step => {
-                        if (step.polyline) {
-                            // 解析polyline字符串为坐标数组
-                            const stepCoords = this.parseGaodePolyline(step.polyline);
-                            coordinates.push(...stepCoords);
-                        }
-                    });
-                }
-
-                if (coordinates.length === 0) {
-                    // 如果没有详细路径，使用起终点连线
-                    coordinates.push([origin.lng, origin.lat], [destination.lng, destination.lat]);
-                }
-
-                // 缓存路线结果
-                this.cacheRoute(origin, destination, coordinates, parseFloat(path.distance), parseFloat(path.duration));
-
-                return {
-                    success: true,
-                    coordinates: coordinates,
-                    distance: parseFloat(path.distance),
-                    duration: parseFloat(path.duration)
-                };
-            } else {
-                console.warn('⚠️ 高德路径规划API返回错误:', data.info);
-                return { success: false };
-            }
-        } catch (error) {
-            console.error('❌ 调用高德路径规划API失败:', error);
+    async getBffRoute(origin, destination, provider = this.settings.selectedMapApi) {
+        if (!PlannerData.isUsablePlace(origin) || !PlannerData.isUsablePlace(destination)) {
             return { success: false };
+        }
+        const travelMode = this.routePlanOptions?.travelMode || 'DRIVING';
+        try {
+            const result = await this.routeResultProvider.get({
+                provider,
+                origin,
+                destination,
+                travelMode
+            });
+            return { success: true, ...result };
+        } catch (error) {
+            return { success: false };
+        }
+    }
+
+    async drawDetailedRoutesWithBff(activePlaces, provider = this.settings.selectedMapApi) {
+        if (this.taskGenerations && this.routeResultProvider) return this.startRoutePipeline();
+        activePlaces = this.getUsablePlaces(activePlaces);
+        const results = await Promise.all(activePlaces.slice(0, -1).map((origin, index) =>
+            this.getBffRoute(origin, activePlaces[index + 1], provider)
+        ));
+        if (provider !== this.settings.selectedMapApi || !this.isMapLoaded) return;
+
+        this.clearAllRoutes();
+        const colors = this.getTiandituRouteColors();
+        const tiandituLayers = [];
+        results.forEach((result, index) => {
+            const origin = activePlaces[index];
+            const destination = activePlaces[index + 1];
+            const coordinates = result.success
+                ? result.coordinates
+                : [[origin.lng, origin.lat], [destination.lng, destination.lat]];
+
+            if (provider === 'google' && typeof google !== 'undefined') {
+                const polyline = new google.maps.Polyline({
+                    path: coordinates.map(point => ({ lat: point[1], lng: point[0] })),
+                    geodesic: true,
+                    strokeColor: colors[index % colors.length],
+                    strokeOpacity: result.success ? 0.9 : 0.65,
+                    strokeWeight: result.success ? 6 : 4,
+                    zIndex: 100 + index
+                });
+                polyline.setMap(this.map);
+                this.polylines.push(polyline);
+            } else if (provider === 'gaode' && typeof AMap !== 'undefined') {
+                if (result.success) this.drawGaodeRouteSegment(coordinates, index);
+                else this.drawGaodeDirectLine(origin, destination, index);
+            } else if (provider === 'tianditu' && typeof T !== 'undefined') {
+                tiandituLayers.push({
+                    path: coordinates.map(point => new T.LngLat(point[0], point[1])),
+                    color: colors[index % colors.length],
+                    lineStyle: result.success ? 'solid' : 'dashed'
+                });
+            }
+        });
+        if (provider === 'tianditu' && tiandituLayers.length > 0) {
+            this.renderTiandituRouteLayers(tiandituLayers);
         }
     }
 
@@ -5053,9 +5018,7 @@ class TravelPlanner {
 
     // 绘制简单路径（通用方法）
     drawSimplePath(activePlaces) {
-        if (!activePlaces) {
-            activePlaces = this.travelList.filter(place => !place.isPending && !place.isBlank && place.lat && place.lng);
-        }
+        activePlaces = this.getUsablePlaces(activePlaces || this.travelList);
 
         if (!this.isMapLoaded || activePlaces.length < 2) {
             return;
@@ -5077,194 +5040,25 @@ class TravelPlanner {
 
     // 天地图路线绘制
     drawTiandituRoute(activePlaces) {
-        // 清除现有路线
-        if (this.polylines) {
-            this.polylines.forEach(polyline => this.map.removeOverLay(polyline));
-            this.polylines = [];
-        }
-
-        const apiKey = this.getApiKey('tianditu');
-        if (!apiKey) {
-            console.warn('⚠️ 天地图API密钥未配置，使用简单连线');
-            this.drawTiandituSimplePath(activePlaces);
-            return;
-        }
-
-        console.log('🛣️ 使用天地图路径规划API绘制路线');
-        this.drawTiandituRoutesWithAPI(activePlaces, apiKey);
+        this.scheduleRoutePipeline(0);
     }
 
-    async drawTiandituRoutesWithAPI(activePlaces, apiKey) {
-        try {
-            this.polylines = this.polylines || [];
-
-            // 先立即绘制简单连线（快速显示）
-            this.drawTiandituSimplePath(activePlaces);
-
-            // 异步获取详细路径
-            this.drawDetailedTiandituRoutes(activePlaces, apiKey);
-
-        } catch (error) {
-            console.error('❌ 天地图路径规划出错:', error);
-            this.drawTiandituSimplePath(activePlaces);
-        }
+    async drawTiandituRoutesWithAPI(activePlaces) {
+        return this.drawDetailedRoutesWithBff(activePlaces, 'tianditu');
     }
 
-    async drawDetailedTiandituRoutes(activePlaces, apiKey) {
-        try {
-            const routePromises = [];
-
-            for (let i = 0; i < activePlaces.length - 1; i++) {
-                const origin = activePlaces[i];
-                const destination = activePlaces[i + 1];
-
-                routePromises.push(
-                    this.getTiandituRoute(origin, destination, apiKey)
-                );
-            }
-
-            const results = await Promise.allSettled(routePromises);
-
-            // 清除之前的路线
-            if (this.polylines) {
-                this.polylines.forEach(polyline => this.map.removeOverLay(polyline));
-                this.polylines = [];
-            }
-
-            const colors = [
-                '#e74c3c', '#3498db', '#2ecc71', '#f39c12', '#9b59b6',
-                '#1abc9c', '#e67e22', '#34495e', '#f1c40f', '#e91e63'
-            ];
-
-            results.forEach((result, i) => {
-                const color = colors[i % colors.length];
-
-                if (result.status === 'fulfilled' && result.value && result.value.success && result.value.coordinates) {
-                    const path = result.value.coordinates.map(pt => new T.LngLat(pt[0], pt[1]));
-
-                    const polyline = new T.Polyline(path, {
-                        color: color,
-                        weight: 8,
-                        opacity: 0.9,
-                        lineStyle: 'solid'
-                    });
-
-                    this.map.addOverLay(polyline);
-                    this.polylines.push(polyline);
-                } else {
-                    // 回退简单连线
-                    const origin = activePlaces[i];
-                    const destination = activePlaces[i + 1];
-                    const path = [
-                        new T.LngLat(origin.lng, origin.lat),
-                        new T.LngLat(destination.lng, destination.lat)
-                    ];
-
-                    const polyline = new T.Polyline(path, {
-                        color: color,
-                        weight: 8,
-                        opacity: 0.9,
-                        lineStyle: 'dashed'
-                    });
-
-                    this.map.addOverLay(polyline);
-                    this.polylines.push(polyline);
-                }
-            });
-
-        } catch (error) {
-            console.error('❌ 绘制天地图详细路线失败:', error);
-        }
+    async drawDetailedTiandituRoutes(activePlaces) {
+        return this.drawDetailedRoutesWithBff(activePlaces, 'tianditu');
     }
 
-    async getTiandituRoute(origin, destination, apiKey) {
-        // 检查路线缓存
-        const cachedRoute = this.getCachedRoute(origin, destination);
-        if (cachedRoute) {
-            return {
-                success: true,
-                coordinates: cachedRoute.coordinates,
-                distance: cachedRoute.distance,
-                duration: cachedRoute.duration
-            };
-        }
-
-        return new Promise((resolve) => {
-            if (!this.map || typeof T === 'undefined') {
-                resolve({ success: false });
-                return;
-            }
-
-            let settled = false;
-            let drivingRoute = null;
-            let timeoutId = null;
-            const finish = (value) => {
-                if (settled) return;
-                settled = true;
-                if (timeoutId) clearTimeout(timeoutId);
-                if (drivingRoute && typeof drivingRoute.clearResults === 'function') {
-                    drivingRoute.clearResults();
-                }
-                resolve(value);
-            };
-
-            timeoutId = setTimeout(() => {
-                console.warn('⚠️ 天地图路径规划请求超时');
-                finish({ success: false });
-            }, 15000);
-
-            try {
-                const config = {
-                    style: 0,
-                    onSearchComplete: (result) => {
-                        if (result && typeof result.getPlan === 'function') {
-                            const plan = result.getPlan(0);
-                            if (plan) {
-                                const distance = Number(plan.getDistance());
-                                const duration = Number(plan.getDuration()) / 60;
-
-                                // getPath 返回的是 T.LngLat 数组
-                                const tLngLats = plan.getPath() || [];
-                                const coordinates = tLngLats.map(pt => [
-                                    typeof pt.getLng === 'function' ? pt.getLng() : pt.lng,
-                                    typeof pt.getLat === 'function' ? pt.getLat() : pt.lat
-                                ]).filter(pt => Number.isFinite(pt[0]) && Number.isFinite(pt[1]));
-
-                                if (coordinates.length >= 2 && Number.isFinite(distance) && Number.isFinite(duration)) {
-                                    // 缓存路线
-                                    this.cacheRoute(origin, destination, coordinates, distance, duration);
-
-                                    finish({
-                                        success: true,
-                                        coordinates: coordinates,
-                                        distance: distance,
-                                        duration: duration
-                                    });
-                                    return;
-                                }
-                            }
-                        }
-
-                        console.warn('⚠️ 天地图路径规划未返回有效路线');
-                        finish({ success: false });
-                    }
-                };
-
-                drivingRoute = new T.DrivingRoute(this.map, config);
-                drivingRoute.search(new T.LngLat(origin.lng, origin.lat), new T.LngLat(destination.lng, destination.lat));
-            } catch (error) {
-                console.error('❌ 天地图路径规划异常:', error);
-                finish({ success: false });
-            }
-        });
+    async getTiandituRoute(origin, destination) {
+        return this.getBffRoute(origin, destination, 'tianditu');
     }
 
     // 天地图简单路径绘制
     drawTiandituSimplePath(activePlaces) {
-        const colors = [
-            '#e74c3c', '#3498db', '#2ecc71', '#f39c12', '#9b59b6',
-            '#1abc9c', '#e67e22', '#34495e', '#f1c40f', '#e91e63'
-        ];
+        const colors = this.getTiandituRouteColors();
+        const routeLayers = [];
 
         for (let i = 0; i < activePlaces.length - 1; i++) {
             const color = colors[i % colors.length];
@@ -5273,16 +5067,47 @@ class TravelPlanner {
                 new T.LngLat(activePlaces[i + 1].lng, activePlaces[i + 1].lat)
             ];
 
-            const polyline = new T.Polyline(path, {
-                color: color,
-                weight: 8,
-                opacity: 0.9,
-                lineStyle: 'solid'
+            routeLayers.push({ path, color, lineStyle: 'solid' });
+        }
+
+        this.renderTiandituRouteLayers(routeLayers);
+    }
+
+    // 天地图底图道路颜色较丰富，使用深色描边托起高亮路线，避免与底图混淆
+    renderTiandituRouteLayers(routeLayers) {
+        const outlineColor = '#102a43';
+
+        // 先绘制所有外轮廓，再绘制彩色主线，保证各路线段都处于轮廓之上
+        routeLayers.forEach(({ path, lineStyle }) => {
+            const outline = new T.Polyline(path, {
+                color: outlineColor,
+                weight: 14,
+                opacity: 0.78,
+                lineStyle: lineStyle
             });
 
-            this.map.addOverLay(polyline);
-            this.polylines.push(polyline);
-        }
+            this.map.addOverLay(outline);
+            this.polylines.push(outline);
+        });
+
+        routeLayers.forEach(({ path, color, lineStyle }) => {
+            const route = new T.Polyline(path, {
+                color: color,
+                weight: 7,
+                opacity: 1,
+                lineStyle: lineStyle
+            });
+
+            this.map.addOverLay(route);
+            this.polylines.push(route);
+        });
+    }
+
+    getTiandituRouteColors() {
+        return [
+            '#ff4d35', '#00a6fb', '#00b86b', '#ff9f1c', '#8b5cf6',
+            '#00b8a9', '#f97316', '#2563eb', '#eab308', '#ec4899'
+        ];
     }
 
     // 扩展边界的辅助方法
@@ -5302,31 +5127,40 @@ class TravelPlanner {
 
     // 改变地图提供商
     changeMapProvider(segmentKey, provider) {
-        const config = this.routeSegments.get(segmentKey) || {};
-        config.mapProvider = provider;
-        this.routeSegments.set(segmentKey, config);
+        if (!['amap', 'google', 'bing', 'tianditu'].includes(provider)) return;
+        this.dispatch({
+            type: 'UPDATE_ROUTE_SEGMENT',
+            segmentKey,
+            config: { mapProvider: provider }
+        });
 
         // 仅更新按钮状态，不重新计算距离时间
-        const buttons = document.querySelectorAll(`[onclick*="changeMapProvider('${segmentKey}'"]`);
+        const buttons = Array.from(document.querySelectorAll('button[data-action="change-map-provider"]'))
+            .filter(button => button.dataset.segmentKey === String(segmentKey));
         buttons.forEach(button => {
             button.classList.remove('active');
-            if (button.getAttribute('onclick').includes(`'${provider}'`)) {
+            if (button.dataset.provider === provider) {
                 button.classList.add('active');
             }
         });
 
-        // 保存数据
-        this.saveData();
-        this.markAsModified(); // 标记为已修改
         console.log(`地图提供商已更改为: ${provider}`);
     }
 
     // 打开导航路线 - 支持多种导航应用
     openNavigationRoute(segmentKey, fromIndex, toIndex) {
-        if (fromIndex >= this.travelList.length || toIndex >= this.travelList.length) return;
+        fromIndex = Number(fromIndex);
+        toIndex = Number(toIndex);
+        if (!Number.isInteger(fromIndex) || !Number.isInteger(toIndex) ||
+            fromIndex < 0 || toIndex < 0 ||
+            fromIndex >= this.travelList.length || toIndex >= this.travelList.length) return;
 
         const fromPlace = this.travelList[fromIndex];
         const toPlace = this.travelList[toIndex];
+        if (!PlannerData.isUsablePlace(fromPlace) || !PlannerData.isUsablePlace(toPlace)) {
+            this.showToast('路线坐标无效');
+            return;
+        }
         const navigationApp = this.settings.navigationApp;
 
         let url = '';
@@ -5364,17 +5198,7 @@ class TravelPlanner {
                 break;
         }
 
-        // 根据用户偏好设置决定是否在新标签页中打开
-        const openInNewTab = this.settings.preferences?.openInNewTab !== false;
-        const target = openInNewTab ? '_blank' : '_self';
-
-        window.open(url, target);
-
-        // 如果用户设置了显示导航提示
-        if (this.settings.preferences?.showNavigationHint !== false) {
-            const targetText = openInNewTab ? '新标签页' : '当前页面';
-            this.showToast(`已在${targetText}中打开${appName}导航`);
-        }
+        this.openNavigationUrl(url, appName, `${String(fromPlace.name || '')} → ${String(toPlace.name || '')}`, '导航');
 
         console.log(`打开${appName}导航: 从 "${fromPlace.name}" 到 "${toPlace.name}"`);
     }
@@ -5443,125 +5267,51 @@ class TravelPlanner {
     }
 
     // 计算单个路线段距离
-    calculateSegmentDistance(segmentKey) {
+    async calculateSegmentDistance(segmentKey) {
         const [fromId, toId] = segmentKey.split('-');
         const fromPlace = this.travelList.find(p => p.id.toString() === fromId);
         const toPlace = this.travelList.find(p => p.id.toString() === toId);
 
-        if (!fromPlace || !toPlace) return;
-
-        const selectedMapApi = this.settings.selectedMapApi;
-        console.log(`📏 计算路线段距离: ${fromPlace.name} -> ${toPlace.name}, 使用${selectedMapApi} API`);
-
-        if (selectedMapApi === 'google' && this.distanceMatrixService && this.isMapLoaded) {
-            this.calculateSegmentDistanceWithGoogle(fromPlace, toPlace, toId);
-        } else if (selectedMapApi === 'gaode') {
-            this.calculateSegmentDistanceWithGaode(fromPlace, toPlace, toId);
-        } else if (selectedMapApi === 'tianditu') {
-            this.calculateSegmentDistanceWithTianditu(fromPlace, toPlace, toId);
-        } else {
-            // 使用直线距离作为备用
-            this.calculateSegmentDistanceWithStraightLine(fromPlace, toPlace, toId, '估算');
+        if (!PlannerData.isUsablePlace(fromPlace) || !PlannerData.isUsablePlace(toPlace)) return;
+        const result = await this.calculateBffDistance(fromPlace, toPlace);
+        const distanceElement = document.getElementById(`distance-${toId}`);
+        const durationElement = document.getElementById(`duration-${toId}`);
+        if (!result.success) {
+            this.calculateSegmentDistanceWithStraightLine(fromPlace, toPlace, toId, '直线');
+            return;
         }
+        const metrics = PlannerData.createRouteMetrics(result.distanceMeters, result.durationSeconds);
+        this.routeMetrics.set(`${fromPlace.id}-${toPlace.id}`, metrics);
+        if (distanceElement) distanceElement.textContent = `${(metrics.distanceMeters / 1000).toFixed(1)} 公里`;
+        if (durationElement) durationElement.textContent = `${Math.round(metrics.durationSeconds / 60)} 分钟`;
     }
 
-    // 使用Google API计算路线段距离
     calculateSegmentDistanceWithGoogle(fromPlace, toPlace, toId) {
-        this.distanceMatrixService.getDistanceMatrix({
-            origins: [{ lat: fromPlace.lat, lng: fromPlace.lng }],
-            destinations: [{ lat: toPlace.lat, lng: toPlace.lng }],
-            travelMode: google.maps.TravelMode.DRIVING,
-            unitSystem: google.maps.UnitSystem.METRIC,
-            avoidHighways: false,
-            avoidTolls: false
-        }, (response, status) => {
-            const distanceElement = document.getElementById(`distance-${toId}`);
-            const durationElement = document.getElementById(`duration-${toId}`);
-
-            if (status === 'OK' && response.rows[0].elements[0].status === 'OK') {
-                const element = response.rows[0].elements[0];
-
-                if (distanceElement) {
-                    distanceElement.textContent = element.distance.text;
-                }
-                if (durationElement) {
-                    durationElement.textContent = element.duration.text;
-                }
-            } else {
-                // API失败时使用直线距离
-                this.calculateSegmentDistanceWithStraightLine(fromPlace, toPlace, toId, '估算');
-            }
-        });
+        return this.calculateSegmentDistance(`${fromPlace.id}-${toId}`);
     }
 
-    // 使用高德API计算路线段距离
-    async calculateSegmentDistanceWithGaode(fromPlace, toPlace, toId) {
-        const apiKey = this.getApiKey('gaode');
-        if (!apiKey) {
-            console.warn('⚠️ 高德API密钥未配置，使用直线距离');
-            this.calculateSegmentDistanceWithStraightLine(fromPlace, toPlace, toId, '直线');
-            return;
-        }
-
-        try {
-            const result = await this.calculateGaodeDistance(fromPlace, toPlace, apiKey);
-            const distanceElement = document.getElementById(`distance-${toId}`);
-            const durationElement = document.getElementById(`duration-${toId}`);
-
-            if (result.success) {
-                if (distanceElement) {
-                    distanceElement.textContent = `${result.distance.toFixed(1)} 公里`;
-                }
-                if (durationElement) {
-                    durationElement.textContent = `${Math.round(result.duration)} 分钟`;
-                }
-            } else {
-                // API失败时使用直线距离
-                this.calculateSegmentDistanceWithStraightLine(fromPlace, toPlace, toId, '直线');
-            }
-        } catch (error) {
-            console.error('❌ 高德路线段距离计算出错:', error);
-            this.calculateSegmentDistanceWithStraightLine(fromPlace, toPlace, toId, '直线');
-        }
+    calculateSegmentDistanceWithGaode(fromPlace, toPlace, toId) {
+        return this.calculateSegmentDistance(`${fromPlace.id}-${toId}`);
     }
 
-    // 使用天地图路线服务计算单个路线段距离
-    async calculateSegmentDistanceWithTianditu(fromPlace, toPlace, toId) {
-        const apiKey = this.getApiKey('tianditu');
-        if (!apiKey) {
-            this.calculateSegmentDistanceWithStraightLine(fromPlace, toPlace, toId, '直线');
-            return;
-        }
-
-        try {
-            const result = await this.calculateTiandituDistance(fromPlace, toPlace, apiKey);
-            const distanceElement = document.getElementById(`distance-${toId}`);
-            const durationElement = document.getElementById(`duration-${toId}`);
-
-            if (!result.success) {
-                this.calculateSegmentDistanceWithStraightLine(fromPlace, toPlace, toId, '直线');
-                return;
-            }
-
-            if (distanceElement) distanceElement.textContent = `${result.distance.toFixed(1)} 公里`;
-            if (durationElement) durationElement.textContent = `${Math.round(result.duration)} 分钟`;
-        } catch (error) {
-            console.error('❌ 天地图路线段距离计算出错:', error);
-            this.calculateSegmentDistanceWithStraightLine(fromPlace, toPlace, toId, '直线');
-        }
+    calculateSegmentDistanceWithTianditu(fromPlace, toPlace, toId) {
+        return this.calculateSegmentDistance(`${fromPlace.id}-${toId}`);
     }
 
     // 使用直线距离计算路线段距离
     calculateSegmentDistanceWithStraightLine(fromPlace, toPlace, toId, suffix = '直线') {
-        const distance = this.calculateStraightDistance(fromPlace.lat, fromPlace.lng, toPlace.lat, toPlace.lng);
+        if (!PlannerData.isUsablePlace(fromPlace) || !PlannerData.isUsablePlace(toPlace)) return;
+        const distanceKm = this.calculateStraightDistance(fromPlace.lat, fromPlace.lng, toPlace.lat, toPlace.lng);
+        const metrics = PlannerData.createRouteMetrics(distanceKm * 1000, (distanceKm / 50) * 3600);
+        this.routeMetrics.set(`${fromPlace.id}-${toPlace.id}`, metrics);
         const distanceElement = document.getElementById(`distance-${toId}`);
         const durationElement = document.getElementById(`duration-${toId}`);
 
         if (distanceElement) {
-            distanceElement.textContent = `${distance.toFixed(1)} 公里 (${suffix})`;
+            distanceElement.textContent = `${distanceKm.toFixed(1)} 公里 (${suffix})`;
         }
         if (durationElement) {
-            durationElement.textContent = `约${Math.round(distance / 50 * 60)} 分钟`;
+            durationElement.textContent = `约${Math.round(metrics.durationSeconds / 60)} 分钟`;
         }
     }
 
@@ -5574,6 +5324,7 @@ class TravelPlanner {
                 (position) => {
                     const lat = position.coords.latitude;
                     const lng = position.coords.longitude;
+                    this.currentLocation = { lat, lng };
 
                     console.log(`📍 获取到位置: ${lat.toFixed(6)}, ${lng.toFixed(6)}`);
 
@@ -5633,12 +5384,9 @@ class TravelPlanner {
                 map: this.map,
                 title: '我的位置',
                 icon: {
-                    url: 'data:image/svg+xml;charset=UTF-8,' + encodeURIComponent(`
-                        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-                            <circle cx="12" cy="12" r="8" fill="#27ae60" stroke="white" stroke-width="2"/>
-                            <circle cx="12" cy="12" r="3" fill="white"/>
-                        </svg>
-                    `),
+                    url: 'data:image/svg+xml;charset=UTF-8,' + encodeURIComponent(
+                        Security.renderLocationMarkerSvg('compact')
+                    ),
                     scaledSize: new google.maps.Size(24, 24)
                 }
             });
@@ -5663,26 +5411,7 @@ class TravelPlanner {
             this.currentLocationMarker = new AMap.Marker({
                 position: [lng, lat],
                 title: '我的位置',
-                content: `
-                    <div style="
-                        width: 24px;
-                        height: 24px;
-                        background: #27ae60;
-                        border: 2px solid white;
-                        border-radius: 50%;
-                        display: flex;
-                        align-items: center;
-                        justify-content: center;
-                        box-shadow: 0 2px 6px rgba(0,0,0,0.3);
-                    ">
-                        <div style="
-                            width: 8px;
-                            height: 8px;
-                            background: white;
-                            border-radius: 50%;
-                        "></div>
-                    </div>
-                `
+                content: Security.renderMapSdkHtml('current-location')
             });
 
             this.map.add(this.currentLocationMarker);
@@ -5791,6 +5520,7 @@ class TravelPlanner {
         } else {
             this.showToast('⚠️ 当前地图API不支持卫星图切换');
         }
+        satelliteBtn.setAttribute('aria-pressed', String(this.isSatelliteMode));
     }
 
     // 切换显示/隐藏地点名称
@@ -5799,6 +5529,7 @@ class TravelPlanner {
 
         this.showPlaceNames = !this.showPlaceNames;
         const toggleBtn = document.getElementById('toggleNamesBtn');
+        toggleBtn.setAttribute('aria-pressed', String(this.showPlaceNames));
         const selectedMapApi = this.settings.selectedMapApi;
 
         if (this.placeLabels.length > 0 || this.pendingMarkers.length > 0) {
@@ -5927,7 +5658,6 @@ class TravelPlanner {
                 }
             });
         }
-
         if (allLabels.length === 0) return;
 
         // 1. 批量读取 DOM 尺寸和初始位置（减少重排）
@@ -6003,12 +5733,28 @@ class TravelPlanner {
         }
 
         // 3. 执行避让数学计算
+        const useSpatialIndex = labelData.length >= 16;
         const occupiedRects = [];
+        const spatialGrid = useSpatialIndex ? new PerformanceCore.SpatialGrid(96) : null;
+        let collisionComparisons = 0;
         const padding = 6;
+        const occupy = rect => {
+            if (spatialGrid) spatialGrid.insert(rect);
+            else occupiedRects.push(rect);
+        };
+        const conflictsWithOccupied = (rect, owner) => {
+            if (spatialGrid) return spatialGrid.intersects(rect, owner);
+            return occupiedRects.some(candidate => {
+                if (candidate.type === 'pin' && candidate.owner === owner) return false;
+                collisionComparisons += 1;
+                return !(rect.right < candidate.left || rect.left > candidate.right ||
+                    rect.bottom < candidate.top || rect.top > candidate.bottom);
+            });
+        };
 
         // 优先锁定图标区域为禁区
         labelData.forEach(label => {
-            occupiedRects.push({
+            occupy({
                 type: 'pin',
                 owner: label,
                 left: label.centerX - 18,
@@ -6027,22 +5773,21 @@ class TravelPlanner {
                     bottom: label.centerY - candidate.y + label.height + padding
                 };
 
-                const conflict = occupiedRects.some(r => {
-                    // 名称的默认位置已经与自己的大头针留有安全间距；
-                    // 这里只避让其他大头针，避免每个名称都被固定多抬高一档。
-                    if (r.type === 'pin' && r.owner === label) return false;
-                    return !(rect.right < r.left || rect.left > r.right ||
-                             rect.bottom < r.top || rect.top > r.bottom);
-                });
+                // 名称默认位置已与自己的大头针留有间距，只避让其他占用区。
+                const conflict = conflictsWithOccupied(rect, label);
 
                 if (!conflict) {
                     label.offsetX = candidate.x;
                     label.offsetY = candidate.y;
-                    occupiedRects.push({ ...rect, type: 'label', owner: label });
+                    occupy({ ...rect, type: 'label', owner: label });
                     break;
                 }
             }
         });
+        collisionComparisons += spatialGrid?.comparisons || 0;
+        if (this.performanceMetrics) {
+            this.performanceMetrics.labelCollisionComparisons += collisionComparisons;
+        }
 
         // 4. 批量应用样式（统一渲染）
         labelData.forEach(data => {
@@ -6099,13 +5844,21 @@ class TravelPlanner {
         lineContainer.style.left = `calc(50% + ${left}px)`;
         lineContainer.style.top = `${top}px`;
 
-        // 使用 SVG 画虚线
-        lineContainer.innerHTML = `
-            <svg width="${Math.max(width, 2)}" height="${Math.max(height, 2)}" style="overflow:visible">
-                <line x1="${startX - left}" y1="${startY - top}" x2="${endX - left}" y2="${endY - top}"
-                    style="stroke: rgba(102, 126, 234, 0.6); stroke-width: 2; stroke-dasharray: 4,3;" />
-            </svg>
-        `;
+        // 使用 DOM SVG API 画虚线，数值不经过 HTML 解析器。
+        const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+        svg.setAttribute('width', String(Math.max(width, 2)));
+        svg.setAttribute('height', String(Math.max(height, 2)));
+        svg.style.overflow = 'visible';
+        const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+        line.setAttribute('x1', String(startX - left));
+        line.setAttribute('y1', String(startY - top));
+        line.setAttribute('x2', String(endX - left));
+        line.setAttribute('y2', String(endY - top));
+        line.style.stroke = 'rgba(102, 126, 234, 0.6)';
+        line.style.strokeWidth = '2';
+        line.style.strokeDasharray = '4,3';
+        svg.appendChild(line);
+        lineContainer.replaceChildren(svg);
     }
 
     // 更新待定点按钮状态
@@ -6130,6 +5883,7 @@ class TravelPlanner {
                 this.clearPendingMarkers();
             }
         }
+        toggleBtn.setAttribute('aria-pressed', String(this.showPendingPlaces));
 
         console.log(`🔄 待定点按钮状态已更新: ${this.showPendingPlaces ? '显示' : '隐藏'}, 待定点数量: ${pendingCount}`);
     }
@@ -6161,19 +5915,66 @@ class TravelPlanner {
             this.applyCityFilterWithoutFitting();
             this.showToast('已隐藏待定点');
         }
+        toggleBtn.setAttribute('aria-pressed', String(this.showPendingPlaces));
     }
 
     // 创建待定点标记
     createPendingMarkers() {
-        // 清除现有的待定点标记
-        this.clearPendingMarkers();
+        this.syncPendingMarkersIncremental();
+    }
 
-        const pendingPlaces = this.travelList.filter(place => place.isPending);
-        pendingPlaces.forEach(place => {
-            this.addPendingMarker(place);
+    pendingMarkerSignature(place) {
+        return JSON.stringify([
+            this.settings.selectedMapApi,
+            String(place.id),
+            Number(place.lat),
+            Number(place.lng),
+            place.customName || place.name,
+            this.showPlaceNames
+        ]);
+    }
+
+    removePendingMarkerById(id) {
+        const markerData = this.pendingMarkers.find(item => String(item.id) === String(id));
+        if (!markerData) return;
+        const selectedMapApi = this.settings.selectedMapApi;
+        if (markerData.marker) {
+            if (selectedMapApi === 'google' && typeof google !== 'undefined') markerData.marker.setMap(null);
+            else if (selectedMapApi === 'gaode' && typeof AMap !== 'undefined') this.map.remove(markerData.marker);
+            else if (selectedMapApi === 'tianditu' && typeof T !== 'undefined') this.map.removeOverLay(markerData.marker);
+        }
+        if (markerData.label) {
+            if (selectedMapApi === 'google' && typeof google !== 'undefined') markerData.label.setMap(null);
+            else if (selectedMapApi === 'gaode' && typeof AMap !== 'undefined') this.map.remove(markerData.label);
+            else if (selectedMapApi === 'tianditu' && typeof T !== 'undefined') this.map.removeOverLay(markerData.label);
+        }
+        this.pendingMarkers = this.pendingMarkers.filter(item => String(item.id) !== String(id));
+        this.labelSizeCache?.delete(id);
+        this.labelSizeCache?.delete(String(id));
+    }
+
+    syncPendingMarkersIncremental() {
+        if (!this.isMapLoaded) return;
+        if (!this.showPendingPlaces) {
+            if (this.pendingMarkers.length > 0) this.clearPendingMarkers();
+            return;
+        }
+        const pendingPlaces = this.travelList.filter(place => place.isPending && PlannerData.isValidCoordinate(place));
+        const expected = new Map(pendingPlaces.map(place => [String(place.id), place]));
+        Array.from(this.pendingMarkers).forEach(markerData => {
+            const place = expected.get(String(markerData.id));
+            if (!place || markerData.renderSignature !== this.pendingMarkerSignature(place)) {
+                this.removePendingMarkerById(markerData.id);
+                if (this.performanceMetrics) this.performanceMetrics.markerDeletes += 1;
+            }
         });
-
-        // 应用当前的城市过滤（但不调整地图视角）
+        pendingPlaces.forEach(place => {
+            if (this.pendingMarkers.some(item => String(item.id) === String(place.id))) return;
+            this.addPendingMarker(place);
+            const added = this.pendingMarkers.find(item => String(item.id) === String(place.id));
+            if (added) added.renderSignature = this.pendingMarkerSignature(place);
+            if (this.performanceMetrics) this.performanceMetrics.markerCreates += 1;
+        });
         this.applyCityFilterWithoutFitting();
     }
 
@@ -6200,6 +6001,8 @@ class TravelPlanner {
                     this.map.removeOverLay(markerData.label);
                 }
             }
+            this.labelSizeCache?.delete(markerData.id);
+            this.labelSizeCache?.delete(String(markerData.id));
         });
         this.pendingMarkers = [];
     }
@@ -6207,6 +6010,7 @@ class TravelPlanner {
     // 添加待定点标记
     addPendingMarker(place) {
         if (!this.isMapLoaded) return;
+        if (!PlannerData.isValidCoordinate(place)) return;
 
         // 使用自定义名称（如果有的话）
         const displayName = place.customName || place.name;
@@ -6268,18 +6072,9 @@ class TravelPlanner {
             map: this.map,
             title: `⏳ ${displayName}`,
             icon: {
-                url: 'data:image/svg+xml;charset=UTF-8,' + encodeURIComponent(`
-                    <svg width="40" height="50" viewBox="0 0 40 50" fill="none" xmlns="http://www.w3.org/2000/svg">
-                        <!-- 外层阴影 -->
-                        <ellipse cx="20" cy="47" rx="8" ry="3" fill="rgba(0,0,0,0.3)"/>
-                        <!-- 主要标记 -->
-                        <path d="M20 3C13.4 3 8 8.4 8 15C8 24.75 20 47 20 47C20 47 32 24.75 32 15C32 8.4 26.6 3 20 3Z" fill="#f39c12" stroke="#ffffff" stroke-width="2"/>
-                        <!-- 内圆 -->
-                        <circle cx="20" cy="15" r="6" fill="#ffffff"/>
-                        <!-- 待定图标 -->
-                        <text x="20" y="19" text-anchor="middle" font-family="Arial" font-size="10" font-weight="bold" fill="#f39c12">⏳</text>
-                    </svg>
-                `),
+                url: 'data:image/svg+xml;charset=UTF-8,' + encodeURIComponent(
+                    Security.renderMapMarkerSvg({ pending: true })
+                ),
                 scaledSize: new google.maps.Size(40, 50),
                 anchor: new google.maps.Point(20, 50)
             },
@@ -6304,33 +6099,10 @@ class TravelPlanner {
 
     // 创建高德地图待定点标记
     createGaodePendingMarker(place, displayName) {
-        // 使用SVG创建待定点标记
-        const pendingMarkerSvg = `
-            <svg width="40" height="50" viewBox="0 0 40 50" xmlns="http://www.w3.org/2000/svg">
-                <!-- 阴影 -->
-                <ellipse cx="20" cy="47" rx="8" ry="3" fill="rgba(0,0,0,0.3)"/>
-                <!-- 主要标记 -->
-                <path d="M20 3C13.4 3 8 8.4 8 15C8 24.75 20 47 20 47C20 47 32 24.75 32 15C32 8.4 26.6 3 20 3Z" fill="#f39c12" stroke="#ffffff" stroke-width="2"/>
-                <!-- 内圆 -->
-                <circle cx="20" cy="15" r="6" fill="#ffffff"/>
-                <!-- 待定图标 -->
-                <text x="20" y="19" text-anchor="middle" font-family="Arial, sans-serif" font-size="10" font-weight="bold" fill="#f39c12">⏳</text>
-            </svg>
-        `;
-
         const marker = new AMap.Marker({
             position: [place.lng, place.lat],
             title: `⏳ ${displayName}`,
-            content: `
-                <div style="
-                    position: relative;
-                    width: 40px;
-                    height: 50px;
-                    cursor: pointer;
-                ">
-                    ${pendingMarkerSvg}
-                </div>
-            `,
+            content: Security.renderMapSdkHtml('pending-marker'),
             anchor: 'bottom-center',
             zIndex: 500
         });
@@ -6357,33 +6129,7 @@ class TravelPlanner {
         const labelMarker = new AMap.Marker({
             position: [place.lng, place.lat],
             offset: new AMap.Pixel(0, -75),
-            content: `
-                <div style="
-                    position: absolute;
-                    background: linear-gradient(135deg, rgba(255,193,7,0.95) 0%, rgba(255,235,59,0.97) 100%);
-                    border: 1px solid rgba(255,193,7,0.9);
-                    border-radius: 8px;
-                    padding: 6px 10px;
-                    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-                    font-size: 12px;
-                    font-weight: 600;
-                    color: #8b5a00;
-                    white-space: nowrap;
-                    box-shadow: 0 4px 12px rgba(0,0,0,0.15), 0 2px 4px rgba(0,0,0,0.1);
-                    backdrop-filter: blur(8px);
-                    text-shadow: 0 1px 2px rgba(255,255,255,0.8);
-                    min-width: 60px;
-                    text-align: center;
-                    cursor: default;
-                    user-select: none;
-                    z-index: 600;
-                    left: 50%;
-                    transform: translateX(-50%);
-                    pointer-events: none;
-                ">
-                    ⏳ ${displayName}
-                </div>
-            `,
+            content: Security.renderMapSdkHtml('pending-label', { text: displayName }),
             anchor: 'bottom-center',
             zIndex: 600,
             clickable: false
@@ -6395,24 +6141,7 @@ class TravelPlanner {
 
     // 创建天地图待定点标记
     createTiandituPendingMarker(place, displayName) {
-        const pendingMarkerSvg = `
-            <svg width="40" height="50" viewBox="0 0 40 50" xmlns="http://www.w3.org/2000/svg">
-                <!-- 阴影 -->
-                <ellipse cx="20" cy="47" rx="8" ry="3" fill="rgba(0,0,0,0.3)"/>
-                <!-- 主要标记 -->
-                <path d="M20 3C13.4 3 8 8.4 8 15C8 24.75 20 47 20 47C20 47 32 24.75 32 15C32 8.4 26.6 3 20 3Z" fill="#f39c12" stroke="#ffffff" stroke-width="2"/>
-                <!-- 内圆 -->
-                <circle cx="20" cy="15" r="6" fill="#ffffff"/>
-                <!-- 待定图标 -->
-                <text x="20" y="19" text-anchor="middle" font-family="Arial, sans-serif" font-size="10" font-weight="bold" fill="#f39c12">⏳</text>
-            </svg>
-        `;
-
-        const iconHtml = `
-            <div style="position: relative; width: 40px; height: 50px; cursor: pointer;">
-                ${pendingMarkerSvg}
-            </div>
-        `;
+        const pendingMarkerSvg = Security.renderMapMarkerSvg({ pending: true });
 
         const icon = new T.Icon({
             iconUrl: 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(pendingMarkerSvg),
@@ -6441,33 +6170,7 @@ class TravelPlanner {
 
     // 创建天地图待定点标签
     createTiandituPendingLabel(place, displayName) {
-        const labelHtml = `
-            <div style="
-                position: absolute;
-                background: linear-gradient(135deg, rgba(255,193,7,0.95) 0%, rgba(255,235,59,0.97) 100%);
-                border: 1px solid rgba(255,193,7,0.9);
-                border-radius: 8px;
-                padding: 6px 10px;
-                font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-                font-size: 12px;
-                font-weight: 600;
-                color: #8b5a00;
-                white-space: nowrap;
-                box-shadow: 0 4px 12px rgba(0,0,0,0.15), 0 2px 4px rgba(0,0,0,0.1);
-                backdrop-filter: blur(8px);
-                text-shadow: 0 1px 2px rgba(255,255,255,0.8);
-                min-width: 60px;
-                text-align: center;
-                cursor: default;
-                user-select: none;
-                z-index: 600;
-                left: 50%;
-                transform: translateX(-50%);
-                pointer-events: none;
-            ">
-                ⏳ ${displayName}
-            </div>
-        `;
+        const labelHtml = Security.renderMapSdkHtml('pending-label', { text: displayName });
 
         const label = new T.Label({
             text: labelHtml,
@@ -6486,21 +6189,7 @@ class TravelPlanner {
 
     // 天地图设置当前位置
     setCurrentLocationTianditu(lat, lng) {
-        const locationSvg = `
-            <svg width="40" height="40" viewBox="0 0 40 40" xmlns="http://www.w3.org/2000/svg">
-                <!-- 阴影 -->
-                <ellipse cx="20" cy="35" rx="12" ry="4" fill="rgba(0,0,0,0.2)"/>
-                <!-- 外发光 -->
-                <circle cx="20" cy="20" r="14" fill="rgba(52, 152, 219, 0.2)">
-                    <animate attributeName="r" values="12;20;12" dur="2s" repeatCount="indefinite" />
-                    <animate attributeName="opacity" values="0.8;0;0.8" dur="2s" repeatCount="indefinite" />
-                </circle>
-                <!-- 白色边框 -->
-                <circle cx="20" cy="20" r="10" fill="#ffffff" filter="drop-shadow(0 2px 4px rgba(0,0,0,0.2))"/>
-                <!-- 核心蓝点 -->
-                <circle cx="20" cy="20" r="7" fill="#3498db"/>
-            </svg>
-        `;
+        const locationSvg = Security.renderLocationMarkerSvg('pulse');
 
         const icon = new T.Icon({
             iconUrl: 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(locationSvg),
@@ -6533,7 +6222,7 @@ class TravelPlanner {
 
         this.cityFilterBtn = document.createElement('button');
         this.cityFilterBtn.className = 'control-btn city-filter-btn';
-        this.cityFilterBtn.innerHTML = '🏙️ 全部城市';
+        this.cityFilterBtn.textContent = '🏙️ 全部城市';
         this.cityFilterBtn.title = '切换城市显示';
         this.cityFilterBtn.style.display = 'block'; // 默认显示
         this.cityFilterBtn.addEventListener('click', () => this.toggleCityFilter());
@@ -6652,7 +6341,7 @@ class TravelPlanner {
     // 获取所有城市列表
     getAllCities() {
         const cities = new Set();
-        this.travelList.forEach(place => {
+        this.getUsablePlaces().forEach(place => {
             const city = this.extractCityFromAddress(place.address);
             cities.add(city);
         });
@@ -6685,10 +6374,10 @@ class TravelPlanner {
 
         if (selectedOption === '全部城市') {
             this.currentCityFilter = 'all';
-            this.cityFilterBtn.innerHTML = '🏙️ 全部城市';
+            this.cityFilterBtn.textContent = '🏙️ 全部城市';
         } else {
             this.currentCityFilter = selectedOption;
-            this.cityFilterBtn.innerHTML = `🏙️ ${selectedOption}`;
+            this.cityFilterBtn.textContent = `🏙️ ${selectedOption}`;
         }
 
         // 应用过滤
@@ -6725,7 +6414,7 @@ class TravelPlanner {
                     this.setMarkerVisible(markerObj.marker, true, markerObj.label);
                 });
             }
-            visiblePlaces = this.travelList;
+            visiblePlaces = this.getUsablePlaces();
         } else {
             // 只显示指定城市的游玩点标记
             this.markers.forEach(markerObj => {
@@ -6788,7 +6477,7 @@ class TravelPlanner {
                     this.setMarkerVisible(markerObj.marker, true, markerObj.label);
                 });
             }
-            visiblePlaces = this.travelList;
+            visiblePlaces = this.getUsablePlaces();
         } else {
             // 只显示指定城市的游玩点标记
             this.markers.forEach(markerObj => {
@@ -6825,18 +6514,12 @@ class TravelPlanner {
         }
 
         const cities = this.getAllCities();
-        console.log('检测到的城市:', cities);
-        console.log('当前游玩列表:', this.travelList.map(place => ({
-            name: place.name,
-            address: place.address,
-            extractedCity: this.extractCityFromAddress(place.address)
-        })));
 
         if (cities.length <= 1) {
             // 如果只有一个城市或没有城市，仍然显示按钮但禁用
             this.cityFilterBtn.style.display = 'block';
             this.cityFilterBtn.disabled = true;
-            this.cityFilterBtn.innerHTML = `🏙️ ${cities.length === 0 ? '无城市' : cities[0]}`;
+            this.cityFilterBtn.textContent = `🏙️ ${cities.length === 0 ? '无城市' : cities[0]}`;
             this.cityFilterBtn.title = cities.length === 0 ? '暂无游玩地点' : '只有一个城市，无需过滤';
             console.log('按钮显示但禁用：', cities.length === 0 ? '无城市' : '只有一个城市');
         } else {
@@ -6850,7 +6533,7 @@ class TravelPlanner {
             if (this.currentCityFilter !== 'all' && !cities.includes(this.currentCityFilter)) {
                 // 如果当前过滤的城市不存在了，重置为全部城市
                 this.currentCityFilter = 'all';
-                this.cityFilterBtn.innerHTML = '🏙️ 全部城市';
+                this.cityFilterBtn.textContent = '🏙️ 全部城市';
                 this.applyyCityFilter();
             }
         }
@@ -6858,56 +6541,57 @@ class TravelPlanner {
 
     // 重新创建所有标记
     recreateMarkers() {
+        this.syncMarkersIncremental();
+    }
+
+    activeMarkerSignature(place, index) {
+        return JSON.stringify([
+            this.settings.selectedMapApi,
+            String(place.id),
+            Number(place.lat),
+            Number(place.lng),
+            place.customName || place.name,
+            index,
+            this.showPlaceNames
+        ]);
+    }
+
+    syncMarkersIncremental() {
         if (!this.isMapLoaded) return;
+        const activePlaces = this.getUsablePlaces();
+        const expected = new Map(activePlaces.map((place, index) => [String(place.id), {
+            place,
+            signature: this.activeMarkerSignature(place, index)
+        }]));
 
-        const selectedMapApi = this.settings.selectedMapApi;
-
-        // 清除现有标记但不清除路线
-        this.markers.forEach(m => {
-            if (selectedMapApi === 'google' && typeof google !== 'undefined') {
-                m.marker.setMap(null);
-            } else if (selectedMapApi === 'gaode' && typeof AMap !== 'undefined') {
-                this.map.remove(m.marker);
-            } else if (selectedMapApi === 'tianditu' && typeof T !== 'undefined') {
-                this.map.removeOverLay(m.marker);
-            }
-        });
-        this.markers = [];
-
-        // 清除现有标签
-        this.placeLabels.forEach(l => {
-            if (l.label) {
-                if (selectedMapApi === 'google' && typeof google !== 'undefined') {
-                    l.label.setMap(null);
-                } else if (selectedMapApi === 'gaode' && typeof AMap !== 'undefined') {
-                    this.map.remove(l.label);
-                } else if (selectedMapApi === 'tianditu' && typeof T !== 'undefined') {
-                    this.map.removeOverLay(l.label);
+        Array.from(this.markers).forEach(markerData => {
+            const next = expected.get(String(markerData.id));
+            if (!next || markerData.renderSignature !== next.signature) {
+                const isUpdate = Boolean(next);
+                this.removeMarker(String(markerData.id));
+                if (this.performanceMetrics) {
+                    if (isUpdate) this.performanceMetrics.markerUpdates += 1;
+                    else this.performanceMetrics.markerDeletes += 1;
                 }
             }
         });
-        this.placeLabels = [];
 
-        // 只为激活状态的地点创建新标记
-        const activePlaces = this.travelList.filter(place => !place.isPending);
-        activePlaces.forEach(place => {
+        activePlaces.forEach((place, index) => {
+            if (this.markers.some(markerData => String(markerData.id) === String(place.id))) return;
             this.addMarker(place);
+            const added = this.markers.find(markerData => String(markerData.id) === String(place.id));
+            if (added) added.renderSignature = this.activeMarkerSignature(place, index);
+            if (this.performanceMetrics) this.performanceMetrics.markerCreates += 1;
         });
 
-        // 如果当前显示待定点，重新创建待定点标记
-        if (this.showPendingPlaces) {
-            this.createPendingMarkers();
-        }
-
-        // 应用当前的城市过滤（不调整地图视角）
+        this.syncPendingMarkersIncremental();
         this.applyCityFilterWithoutFitting();
-
-        // 创建完成后调整标签位置，避免重叠
-        setTimeout(() => this.adjustLabels(), 500);
+        this.adjustLabels();
     }
 
     // 调整地图视野以适应指定的地点
     fitMapToPlaces(places) {
+        places = this.getUsablePlaces(places);
         if (!this.isMapLoaded || places.length === 0) return;
 
         const selectedMapApi = this.settings.selectedMapApi;
@@ -7039,101 +6723,353 @@ class TravelPlanner {
         if (this.travelList.length === 0) return;
 
         if (confirm('确定要清空所有游玩地点和待定地点吗？')) {
-            this.travelList = [];
-            this.currentSchemeId = null; // 清空当前方案标识
-            this.currentSchemeName = null;
-            this.hasUnsavedChanges = false; // 清空后重置为未修改状态
-            this.updatePageTitle(); // 更新页面标题
-            this.updateTravelList();
-            this.updateDistanceSummary(0, 0);
-            this.drawRoute(); // 清空后确保路线也被清除
-            this.clearMarkers();
-            this.saveData();
+            this.dispatch({
+                type: 'REPLACE_PLAN',
+                travelList: [],
+                routeSegments: [],
+                currentSchemeId: null,
+                currentSchemeName: null,
+                hasUnsavedChanges: false,
+                markModified: false
+            });
+            this.updatePageTitle();
             this.loadSavedSchemes(); // 刷新方案列表显示
         }
     }
 
-    // 优化路线（简单的贪心算法）
+    // 打开路线校对台。此步骤只收集纯数据配置，不改变当前行程。
     optimizeRoute() {
-        const activePlaces = this.travelList.filter(place => !place.isPending);
-        const nonBlankActivePlaces = activePlaces.filter(place => !place.isBlank && place.lat && place.lng);
-        const blankPlaces = activePlaces.filter(place => place.isBlank);
-        const pendingPlaces = this.travelList.filter(place => place.isPending);
-
-        if (nonBlankActivePlaces.length < 3) {
+        const places = this.getUsablePlaces();
+        if (places.length < 3) {
             alert('至少需要3个非空白的激活状态地点才能优化路线');
             return;
         }
+        this.pendingOptimization = null;
+        this.populateOptimizationControls(places);
+        this.showOptimizationSetup();
+        document.getElementById('optimizationMethodBadge').textContent = '建议路线';
+        document.getElementById('optimizationStatus').textContent = '';
+        this.dialogManager.open('routeOptimizationModal', {
+            initialFocus: '#optimizationStart',
+            onRequestClose: () => this.closeOptimizationModal()
+        });
+    }
 
-        if (confirm('优化路线将重新排列非空白游玩点的顺序（不影响空白地点和待定列表），是否继续？')) {
-            const optimized = this.greedyTSP(nonBlankActivePlaces);
+    populateOptimizationControls(places) {
+        const startSelect = document.getElementById('optimizationStart');
+        const endSelect = document.getElementById('optimizationEnd');
+        const lockedList = document.getElementById('optimizationLockedPlaces');
+        startSelect.replaceChildren();
+        endSelect.replaceChildren();
+        lockedList.replaceChildren();
 
-            // 创建新的游玩列表：保持空白地点在原位置，优化后的非空白地点按新顺序排列
-            const newTravelList = [];
-            let optimizedIndex = 0;
+        const optionalEnd = this.createElement('option', { text: '不固定终点' });
+        optionalEnd.value = '';
+        endSelect.appendChild(optionalEnd);
+        places.forEach((place, index) => {
+            const displayName = String(place.customName || place.name || place.id);
+            const label = `${index + 1}. ${displayName}`;
+            const startOption = this.createElement('option', { text: label });
+            startOption.value = String(place.id);
+            startSelect.appendChild(startOption);
+            const endOption = this.createElement('option', { text: label });
+            endOption.value = String(place.id);
+            endSelect.appendChild(endOption);
 
-            // 遍历原列表，保持空白地点位置，替换非空白地点
-            activePlaces.forEach(place => {
-                if (place.isBlank) {
-                    // 空白地点保持原位置
-                    newTravelList.push(place);
-                } else if (place.lat && place.lng) {
-                    // 非空白地点使用优化后的顺序
-                    newTravelList.push(optimized[optimizedIndex]);
-                    optimizedIndex++;
-                }
-            });
+            const lockLabel = this.createElement('label', { className: 'locked-place-option' });
+            const checkbox = this.createElement('input', { type: 'checkbox' });
+            checkbox.value = String(place.id);
+            const lockName = this.createElement('span', { text: label });
+            lockLabel.append(checkbox, lockName);
+            lockedList.appendChild(lockLabel);
+        });
+        startSelect.value = String(places[0].id);
+        endSelect.value = '';
+        document.getElementById('optimizationRoundTrip').checked = false;
+        document.getElementById('optimizationTravelMode').value = this.routePlanOptions?.travelMode || 'DRIVING';
+        this.updateOptimizationEndpointState();
+    }
 
-            // 重新组合：优化后的游玩地点 + 待定地点
-            this.travelList = [...newTravelList, ...pendingPlaces];
-            this.updateTravelList();
-            this.calculateDistancesWithDebounce();
-            this.drawRoute();
-            this.saveData();
-            this.markAsModified(); // 标记为已修改
-            alert('路线已优化！空白地点位置保持不变。');
+    updateOptimizationEndpointState() {
+        const start = document.getElementById('optimizationStart');
+        const end = document.getElementById('optimizationEnd');
+        const roundTrip = document.getElementById('optimizationRoundTrip').checked;
+        if (roundTrip || end.value === start.value) end.value = '';
+        end.disabled = roundTrip;
+        Array.from(end.options).forEach(option => {
+            option.disabled = option.value !== '' && option.value === start.value;
+        });
+    }
+
+    showOptimizationSetup() {
+        document.getElementById('optimizationSetup').hidden = false;
+        document.getElementById('optimizationComparison').hidden = true;
+    }
+
+    closeOptimizationModal() {
+        this.dialogManager.close('routeOptimizationModal');
+        this.pendingOptimization = null;
+    }
+
+    optimizationListSignature(places = this.getUsablePlaces()) {
+        return JSON.stringify(places.map(place => [String(place.id), place.lat, place.lng]));
+    }
+
+    async generateRouteSuggestion() {
+        const places = this.getUsablePlaces();
+        const status = document.getElementById('optimizationStatus');
+        const calculateButton = document.getElementById('calculateSuggestionBtn');
+        const signature = this.optimizationListSignature(places);
+        const fixedStartId = document.getElementById('optimizationStart').value;
+        const fixedEndId = document.getElementById('optimizationEnd').value || null;
+        const roundTrip = document.getElementById('optimizationRoundTrip').checked;
+        const travelMode = document.getElementById('optimizationTravelMode').value;
+        const lockedPlaceIds = Array.from(
+            document.querySelectorAll('#optimizationLockedPlaces input[type="checkbox"]:checked')
+        ).map(input => input.value);
+
+        calculateButton.disabled = true;
+        status.classList.remove('is-error');
+        status.textContent = '正在获取交通时间矩阵并计算建议路线…';
+        try {
+            const matrixData = await this.acquireOptimizationMatrices(places, travelMode);
+            if (signature !== this.optimizationListSignature()) {
+                throw new Error('地点列表已改变，请重新生成建议路线');
+            }
+            const input = {
+                places: places.map(place => ({
+                    id: String(place.id),
+                    name: String(place.customName || place.name || place.id),
+                    lat: place.lat,
+                    lng: place.lng
+                })),
+                travelTimeMatrix: matrixData.travelTimeMatrix,
+                distanceMatrix: matrixData.distanceMatrix,
+                matrixSources: matrixData.matrixSources,
+                fixedStartId,
+                fixedEndId,
+                roundTrip,
+                lockedPlaceIds,
+                travelMode,
+                constraints: []
+            };
+            const result = RouteOptimizer.optimizeRoute(input);
+            this.pendingOptimization = { input, result, signature, matrixPlan: matrixData.plan };
+            this.renderOptimizationComparison(this.pendingOptimization);
+            status.textContent = '';
+        } catch (error) {
+            status.classList.add('is-error');
+            status.textContent = error?.message || '无法生成建议路线';
+        } finally {
+            calculateButton.disabled = false;
         }
     }
 
-    // 贪心算法求解TSP问题（简化版）
-    greedyTSP(places) {
-        if (places.length <= 2) return places;
-
-        const result = [places[0]];
-        const remaining = places.slice(1);
-
-        while (remaining.length > 0) {
-            const current = result[result.length - 1];
-            let nearest = 0;
-            let minDistance = Infinity;
-
-            for (let i = 0; i < remaining.length; i++) {
-                const distance = this.calculateStraightDistance(
-                    current.lat, current.lng,
-                    remaining[i].lat, remaining[i].lng
-                );
-                if (distance < minDistance) {
-                    minDistance = distance;
-                    nearest = i;
-                }
-            }
-
-            result.push(remaining.splice(nearest, 1)[0]);
+    async acquireOptimizationMatrices(places, travelMode) {
+        const fallback = RouteOptimizer.createHaversineMatrices(
+            places.map(place => ({ id: String(place.id), name: place.customName || place.name, lat: place.lat, lng: place.lng })),
+            travelMode
+        );
+        const distanceMatrix = fallback.distanceMatrix.map(row => row.slice());
+        const travelTimeMatrix = fallback.travelTimeMatrix.map(row => row.slice());
+        const matrixSources = fallback.matrixSources.map(row => row.slice());
+        const plan = RouteOptimizer.createMatrixAcquisitionPlan(places.length, {
+            providerPairLimit: 400,
+            chunkSize: 5
+        });
+        if (plan.strategy !== 'provider-chunked') {
+            return { distanceMatrix, travelTimeMatrix, matrixSources, plan };
         }
 
-        return result;
+        const fetchChunk = async chunk => {
+            const origins = places.slice(chunk.originStart, chunk.originEnd);
+            const destinations = places.slice(chunk.destinationStart, chunk.destinationEnd);
+            try {
+                const response = await this.bff.routeMatrix({
+                    provider: this.settings.selectedMapApi,
+                    origins: origins.map(place => ({ lat: place.lat, lng: place.lng })),
+                    destinations: destinations.map(place => ({ lat: place.lat, lng: place.lng })),
+                    travelMode
+                });
+                const payload = response?.data || response || {};
+                origins.forEach((origin, originOffset) => {
+                    destinations.forEach((destination, destinationOffset) => {
+                        const element = payload.matrix?.[originOffset]?.[destinationOffset];
+                        const distanceMeters = Number(element?.distanceMeters);
+                        const durationSeconds = Number(element?.durationSeconds);
+                        if (element?.status !== 'OK' || !Number.isFinite(distanceMeters) || distanceMeters < 0 ||
+                            !Number.isFinite(durationSeconds) || durationSeconds < 0) return;
+                        const row = chunk.originStart + originOffset;
+                        const column = chunk.destinationStart + destinationOffset;
+                        distanceMatrix[row][column] = distanceMeters;
+                        travelTimeMatrix[row][column] = durationSeconds;
+                        matrixSources[row][column] = 'provider';
+                    });
+                });
+            } catch (error) {
+                // 对应矩阵块保留 Haversine；结果页会明确标记“直线估算”。
+            }
+        };
+        for (let index = 0; index < plan.chunks.length; index += 2) {
+            await Promise.all(plan.chunks.slice(index, index + 2).map(fetchChunk));
+        }
+        return { distanceMatrix, travelTimeMatrix, matrixSources, plan };
+    }
+
+    renderOptimizationComparison(pending) {
+        const { result, input, matrixPlan } = pending;
+        const original = result.original;
+        const suggestion = result.suggestion;
+        document.getElementById('optimizationSetup').hidden = true;
+        document.getElementById('optimizationComparison').hidden = false;
+        document.getElementById('originalDistance').textContent = this.formatOptimizationDistance(original.distanceMeters);
+        document.getElementById('originalDuration').textContent = this.formatOptimizationDuration(original.durationSeconds);
+        document.getElementById('suggestedDistance').textContent = this.formatOptimizationDistance(suggestion.distanceMeters);
+        document.getElementById('suggestedDuration').textContent = this.formatOptimizationDuration(suggestion.durationSeconds);
+        document.getElementById('optimizationSavings').textContent = this.formatSavingsRatio(result.savings.durationRatio);
+        document.getElementById('optimizationSavingsLabel').textContent = result.savings.durationRatio >= 0
+            ? '预计节省'
+            : '预计变化';
+        document.getElementById('optimizationDistanceSavings').textContent = `距离 ${this.formatSavingsRatio(result.savings.distanceRatio)}`;
+
+        const methodBadge = document.getElementById('optimizationMethodBadge');
+        methodBadge.textContent = result.globalOptimal ? '建议路线 · 精确验证' : '建议路线 · 快速优化';
+        const sourceBadge = document.getElementById('optimizationSourceBadge');
+        const comparisonHasEstimate = original.hasStraightLineEstimates || suggestion.hasStraightLineEstimates;
+        sourceBadge.classList.toggle('is-estimate', comparisonHasEstimate);
+        sourceBadge.textContent = !comparisonHasEstimate
+            ? 'Provider 交通矩阵'
+            : (original.measurement === 'straight-line-estimate' && suggestion.measurement === 'straight-line-estimate'
+                ? '直线估算'
+                : 'Provider + 直线估算');
+        document.getElementById('optimizationBudgetNote').textContent = matrixPlan.strategy === 'provider-chunked'
+            ? `${matrixPlan.chunks.length} 个矩阵分块 · ${result.diagnostics.startsEvaluated} 个确定性起始分支`
+            : `${matrixPlan.reason}，已按预算降级`;
+
+        const names = new Map(input.places.map(place => [place.id, place.name]));
+        const originalPositions = new Map(result.original.routeIds.map((id, index) => [id, index]));
+        const differenceList = document.getElementById('optimizationOrderDiff');
+        differenceList.replaceChildren();
+        let changedCount = 0;
+        result.suggestion.routeIds.forEach((id, index) => {
+            const previous = originalPositions.get(id);
+            const moved = previous !== index;
+            if (moved) changedCount += 1;
+            const item = this.createElement('li', {
+                className: `order-difference-item${moved ? ' is-moved' : ''}`
+            });
+            item.append(
+                this.createElement('span', { className: 'order-number', text: String(index + 1).padStart(2, '0') }),
+                this.createElement('span', { text: names.get(id) || id }),
+                this.createElement('span', {
+                    className: 'order-move',
+                    text: moved ? `原第 ${previous + 1} 站` : '位置不变'
+                })
+            );
+            differenceList.appendChild(item);
+        });
+        document.getElementById('changedPlaceCount').textContent = `${changedCount} 个地点改变位置`;
+
+        const caveat = comparisonHasEstimate
+            ? '部分或全部路段使用直线估算，时间仅用于路线比较；应用后仍会继续尝试获取实际路况。'
+            : '建议基于 Provider 返回的交通时间矩阵。交通会变化，应用前请核对顺序。';
+        const proof = result.globalOptimal
+            ? '小规模路线已通过精确算法交叉验证，界面仍以“建议路线”呈现。'
+            : '本次使用多起点最近邻与 2-opt，并受确定性计算预算限制，未穷举所有可能顺序。';
+        document.getElementById('optimizationCaveat').textContent = `${caveat}${proof}`;
+    }
+
+    formatOptimizationDistance(distanceMeters) {
+        return `${(distanceMeters / 1000).toFixed(1)} 公里`;
+    }
+
+    formatOptimizationDuration(durationSeconds) {
+        const minutes = Math.round(durationSeconds / 60);
+        const hours = Math.floor(minutes / 60);
+        const remainder = minutes % 60;
+        return hours > 0 ? `${hours} 小时 ${remainder} 分钟` : `${remainder} 分钟`;
+    }
+
+    formatSavingsRatio(ratio) {
+        const percentage = Math.abs(ratio * 100).toFixed(1);
+        return ratio >= 0 ? `${percentage}%` : `增加 ${percentage}%`;
+    }
+
+    applyRouteSuggestion() {
+        const pending = this.pendingOptimization;
+        if (!pending) return;
+        if (pending.signature !== this.optimizationListSignature()) {
+            document.getElementById('optimizationCaveat').textContent = '地点列表已改变，请返回并重新生成建议路线。';
+            return;
+        }
+        this.optimizationSnapshot = {
+            travelList: this.travelList.map(place => ({ ...place })),
+            routeSegments: new Map(Array.from(this.routeSegments.entries(), ([key, value]) => [key, { ...value }])),
+            routePlanOptions: { ...this.routePlanOptions },
+            capturedAt: new Date().toISOString()
+        };
+        const orderedPlaces = pending.result.suggestion.routeIds.map(id => this.getPlaceById(id));
+        let optimizedIndex = 0;
+        const nextTravelList = this.travelList.map(place => {
+            if (!PlannerData.isUsablePlace(place)) return place;
+            return orderedPlaces[optimizedIndex++];
+        });
+        const nextRoutePlanOptions = {
+            roundTrip: pending.result.roundTrip,
+            travelMode: pending.result.travelMode
+        };
+        const nextRouteSegments = new Map(this.routeSegments);
+        PlannerData.buildValidSegments(orderedPlaces).forEach(([from, to]) => {
+            const key = `${from.id}-${to.id}`;
+            nextRouteSegments.set(key, {
+                ...(nextRouteSegments.get(key) || { mapProvider: 'amap' }),
+                travelMode: pending.result.travelMode
+            });
+        });
+        this.dispatch({
+            type: 'APPLY_ROUTE_ORDER',
+            travelList: nextTravelList,
+            routeSegments: Array.from(nextRouteSegments.entries()),
+            routePlanOptions: nextRoutePlanOptions
+        });
+        document.getElementById('undoOptimizeBtn').hidden = false;
+        this.closeOptimizationModal();
+        this.showToast('已应用建议路线，可随时撤销');
+    }
+
+    undoRouteOptimization() {
+        if (!this.optimizationSnapshot) return;
+        const routeSegments = Array.from(
+            this.optimizationSnapshot.routeSegments.entries(),
+            ([key, value]) => [key, { ...value }]
+        );
+        const snapshot = this.optimizationSnapshot;
+        this.optimizationSnapshot = null;
+        document.getElementById('undoOptimizeBtn').hidden = true;
+        this.dispatch({
+            type: 'APPLY_ROUTE_ORDER',
+            travelList: snapshot.travelList,
+            routeSegments,
+            routePlanOptions: snapshot.routePlanOptions
+        });
+        this.showToast('已撤销路线优化，恢复优化前快照');
     }
 
     // 保存数据到本地存储
     saveData() {
-        localStorage.setItem('travelPlannerData', JSON.stringify({
+        const record = PlannerData.validateApplicationRecord({
             travelList: this.travelList,
             routeSegments: Array.from(this.routeSegments.entries()),
-            settings: this.settings,
+            settings: this.getSafeSettings(),
             currentSchemeId: this.currentSchemeId,
             currentSchemeName: this.currentSchemeName,
+            hasUnsavedChanges: this.hasUnsavedChanges,
+            dataSchemaVersion: PlannerData.SCHEMA_VERSION,
             lastSaved: new Date().toISOString()
-        }));
+        });
+        PlannerData.atomicWrite(localStorage, {
+            travelPlannerData: JSON.stringify(ClientSecurity.sanitizePersistedRecord(record))
+        });
     }
 
     // 加载已保存的数据（设置已在前面单独加载）
@@ -7141,41 +7077,30 @@ class TravelPlanner {
         try {
             const saved = localStorage.getItem('travelPlannerData');
             if (saved) {
-                const data = JSON.parse(saved);
-                this.travelList = data.travelList || [];
-
-                // 为旧数据添加默认的isPending字段
-                this.travelList.forEach(place => {
-                    if (place.isPending === undefined) {
-                        place.isPending = false;
-                    }
+                const data = PlannerData.readApplicationRecord(localStorage);
+                this.dispatch({
+                    type: 'REPLACE_PLAN',
+                    travelList: data.travelList,
+                    routeSegments: data.routeSegments,
+                    currentSchemeId: data.currentSchemeId ?? null,
+                    currentSchemeName: data.currentSchemeName ?? null,
+                    hasUnsavedChanges: data.hasUnsavedChanges === true,
+                    markModified: false,
+                    persist: false
                 });
-
-                // 恢复路线段配置
-                if (data.routeSegments) {
-                    this.routeSegments = new Map(data.routeSegments);
+                const currentScheme = this.getCurrentScheme(this.getSavedSchemes());
+                if (currentScheme &&
+                    (String(this.currentSchemeId) !== String(currentScheme.id) ||
+                        this.currentSchemeName !== currentScheme.name)) {
+                    this.dispatch({
+                        type: 'SET_SCHEME_BINDING',
+                        currentSchemeId: currentScheme.id,
+                        currentSchemeName: currentScheme.name,
+                        hasUnsavedChanges: this.hasUnsavedChanges
+                    });
                 }
-
-                // 恢复当前方案信息
-                this.currentSchemeId = data.currentSchemeId || null;
-                this.currentSchemeName = data.currentSchemeName || null;
-
-                // 更新页面标题
                 this.updatePageTitle();
-
-                this.updateTravelList();
-                this.calculateDistancesWithDebounce();
-
-                // 重新绘制路线
-                if (this.travelList.length >= 2) {
-                    this.drawRoute();
-                }
-
-                // 更新待定点按钮状态（不重置状态）
                 this.updateTogglePendingButton();
-
-                // 确保城市过滤按钮状态正确
-                this.updateCityFilterButton();
 
                 console.log('✅ 已加载保存的旅游数据');
                 if (this.currentSchemeName) {
@@ -7195,11 +7120,6 @@ class TravelPlanner {
             return;
         }
 
-        if (this.travelList.length === 0) {
-            this.showToast('当前没有游玩地点可保存');
-            return;
-        }
-
         const schemes = this.getSavedSchemes();
 
         // 检查是否重名
@@ -7215,28 +7135,28 @@ class TravelPlanner {
             name: schemeName,
             travelList: [...this.travelList],
             routeSegments: Array.from(this.routeSegments.entries()),
-            settings: { ...this.settings }, // 保存当前设置
             createdAt: createdAt,
             modifiedAt: createdAt, // 创建时修改时间等于创建时间
-            placesCount: this.travelList.length,
-            version: '2.0' // 方案格式版本
+            placesCount: this.getUsablePlaces().length,
+            schemaVersion: PlannerData.SCHEMA_VERSION,
+            version: PlannerData.BACKUP_VERSION
         };
 
         // 移除同名方案（如果存在）
         const filteredSchemes = schemes.filter(scheme => scheme.name !== schemeName);
         filteredSchemes.push(newScheme);
 
-        localStorage.setItem('travelSchemes', JSON.stringify(filteredSchemes));
+        localStorage.setItem('travelSchemes', JSON.stringify(ClientSecurity.sanitizePersistedRecord(filteredSchemes)));
 
-        // 将新保存的方案设为当前方案
-        this.currentSchemeId = newScheme.id;
-        this.currentSchemeName = schemeName;
-        this.hasUnsavedChanges = false; // 重置未保存状态
-        this.updatePageTitle(); // 更新页面标题
+        this.dispatch({
+            type: 'SET_SCHEME_BINDING',
+            currentSchemeId: newScheme.id,
+            currentSchemeName: schemeName,
+            hasUnsavedChanges: false
+        });
+        this.updatePageTitle();
 
-        // 保存数据，包括当前方案信息
-        this.saveData();
-
+        this.announceSaveStatus(`方案“${schemeName}”已保存并设为当前方案`);
         this.showToast(`方案"${schemeName}"保存成功并已设为当前方案`);
 
         document.getElementById('schemeNameInput').value = '';
@@ -7247,43 +7167,9 @@ class TravelPlanner {
     getSavedSchemes() {
         try {
             const schemes = localStorage.getItem('travelSchemes');
-            let parsedSchemes = schemes ? JSON.parse(schemes) : [];
-
-            // 为旧方案添加UUID（如果没有的话）
-            let needsUpdate = false;
-            parsedSchemes = parsedSchemes.map(scheme => {
-                if (!scheme.uuid) {
-                    // 为旧方案生成基于名称和创建时间的UUID
-                    const createdAt = scheme.createdAt || new Date().toISOString();
-                    scheme.uuid = this.generateSchemeUUID(scheme.name, createdAt);
-                    scheme.version = scheme.version || '1.0';
-                    // 如果没有修改时间，设置为创建时间
-                    if (!scheme.modifiedAt) {
-                        scheme.modifiedAt = createdAt;
-                    }
-                    needsUpdate = true;
-                }
-
-                // 为旧地点添加默认的isPending状态
-                if (scheme.travelList && Array.isArray(scheme.travelList)) {
-                    scheme.travelList.forEach(place => {
-                        if (place.isPending === undefined) {
-                            place.isPending = false;
-                            needsUpdate = true;
-                        }
-                    });
-                }
-
-                return scheme;
-            });
-
-            // 如果有方案被更新，保存回localStorage
-            if (needsUpdate) {
-                localStorage.setItem('travelSchemes', JSON.stringify(parsedSchemes));
-                console.log('✅ 为现有方案添加了UUID标识');
-            }
-
-            return parsedSchemes;
+            const parsedSchemes = schemes ? JSON.parse(schemes) : [];
+            // 读取只做校验，不做迁移或写回；旧数据迁移仅在构造阶段显式执行一次。
+            return PlannerData.validateSchemes(parsedSchemes, 'travelSchemes');
         } catch (error) {
             console.error('获取保存方案失败:', error);
             return [];
@@ -7296,14 +7182,16 @@ class TravelPlanner {
         const container = document.getElementById('savedSchemesList');
 
         if (schemes.length === 0) {
-            container.innerHTML = '<div class="empty-schemes">暂无保存的方案</div>';
+            container.replaceChildren(this.createElement('div', { className: 'empty-schemes', text: '暂无保存的方案' }));
             return;
         }
 
         // 按创建时间倒序排列
         schemes.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+        const currentScheme = this.getCurrentScheme(schemes);
 
-        container.innerHTML = schemes.map(scheme => {
+        const fragment = document.createDocumentFragment();
+        schemes.forEach(scheme => {
             const createdDate = new Date(scheme.createdAt).toLocaleString('zh-CN', {
                 year: 'numeric',
                 month: '2-digit',
@@ -7312,12 +7200,11 @@ class TravelPlanner {
                 minute: '2-digit'
             });
 
-            // 计算游玩列表和待定列表的个数
-            const activePlaces = scheme.travelList ? scheme.travelList.filter(place => !place.isPending) : [];
-            const pendingPlaces = scheme.travelList ? scheme.travelList.filter(place => place.isPending) : [];
+            // 方案统计只计算激活、非空白、坐标合法的地点。
+            const schemePlaces = Array.isArray(scheme.travelList) ? scheme.travelList : [];
+            const activePlaces = this.getUsablePlaces(schemePlaces);
             const activeCount = activePlaces.length;
-            const pendingCount = pendingPlaces.length;
-            const totalCount = activeCount + pendingCount;
+            const totalCount = activeCount;
 
             // 格式化修改时间
             const modifiedDate = scheme.modifiedAt ? new Date(scheme.modifiedAt).toLocaleString('zh-CN', {
@@ -7328,7 +7215,7 @@ class TravelPlanner {
                 minute: '2-digit'
             }) : createdDate;
 
-            const isCurrentScheme = this.currentSchemeId === scheme.id;
+            const isCurrentScheme = currentScheme === scheme;
             const schemeItemClass = isCurrentScheme ? 'scheme-item current-scheme' : 'scheme-item';
             const loadButtonText = isCurrentScheme ? '当前' : '切换';
             const loadButtonClass = isCurrentScheme ? 'scheme-btn current-scheme-btn' : 'scheme-btn load-scheme-btn';
@@ -7336,41 +7223,58 @@ class TravelPlanner {
             // 构建详细信息
             const detailInfo = [];
             if (activeCount > 0) detailInfo.push(`${activeCount}个游玩`);
-            if (pendingCount > 0) detailInfo.push(`${pendingCount}个待定`);
-            if (detailInfo.length === 0) detailInfo.push('无地点');
+            if (detailInfo.length === 0) detailInfo.push('无有效地点');
 
-            return `
-                <div class="${schemeItemClass}">
-                    <div class="scheme-info">
-                        <div class="scheme-name">
-                            ${isCurrentScheme ? '📌 ' : ''}${scheme.name}
-                            ${isCurrentScheme ? ' <span class="current-badge">当前方案</span>' : ''}
-                        </div>
-                        <div class="scheme-date">
-                            <div class="scheme-time-info">
-                                <span class="created-time">📅 创建：${createdDate}</span>
-                                ${scheme.modifiedAt && scheme.modifiedAt !== scheme.createdAt ?
-                    `<span class="modified-time">✏️ 修改：${modifiedDate}</span>` : ''}
-                            </div>
-                            <div class="scheme-counts">
-                                <span class="places-info">📍 ${detailInfo.join('，')}</span>
-                                <span class="total-info">（共${totalCount}个地点）</span>
-                            </div>
-                        </div>
-                    </div>
-                    <div class="scheme-actions">
-                        <button class="${loadButtonClass}" onclick="app.loadScheme(${scheme.id})" ${isCurrentScheme ? 'disabled' : ''}>${loadButtonText}</button>
-                        <button class="scheme-btn delete-scheme-btn" onclick="app.deleteScheme(${scheme.id})">删除</button>
-                    </div>
-                </div>
-            `;
-        }).join('');
+            const schemeItem = this.createElement('div', { className: schemeItemClass });
+            const schemeInfo = this.createElement('div', { className: 'scheme-info' });
+            const schemeName = this.createElement('div', {
+                className: 'scheme-name',
+                text: `${isCurrentScheme ? '📌 ' : ''}${String(scheme.name ?? '')}`
+            });
+            if (isCurrentScheme) {
+                schemeName.append(' ', this.createElement('span', { className: 'current-badge', text: '当前方案' }));
+            }
+
+            const schemeDate = this.createElement('div', { className: 'scheme-date' });
+            const timeInfo = this.createElement('div', { className: 'scheme-time-info' });
+            timeInfo.appendChild(this.createElement('span', { className: 'created-time', text: `📅 创建：${createdDate}` }));
+            if (scheme.modifiedAt && scheme.modifiedAt !== scheme.createdAt) {
+                timeInfo.appendChild(this.createElement('span', { className: 'modified-time', text: `✏️ 修改：${modifiedDate}` }));
+            }
+            const counts = this.createElement('div', { className: 'scheme-counts' });
+            counts.append(
+                this.createElement('span', { className: 'places-info', text: `📍 ${detailInfo.join('，')}` }),
+                this.createElement('span', { className: 'total-info', text: `（共${totalCount}个地点）` })
+            );
+            schemeDate.append(timeInfo, counts);
+            schemeInfo.append(schemeName, schemeDate);
+
+            const actions = this.createElement('div', { className: 'scheme-actions' });
+            actions.append(
+                this.createElement('button', {
+                    className: loadButtonClass,
+                    text: loadButtonText,
+                    type: 'button',
+                    disabled: isCurrentScheme,
+                    dataset: { action: 'load-scheme', id: String(scheme.id) }
+                }),
+                this.createElement('button', {
+                    className: 'scheme-btn delete-scheme-btn',
+                    text: '删除',
+                    type: 'button',
+                    dataset: { action: 'delete-scheme', id: String(scheme.id) }
+                })
+            );
+            schemeItem.append(schemeInfo, actions);
+            fragment.appendChild(schemeItem);
+        });
+        container.replaceChildren(fragment);
     }
 
     // 加载方案
     loadScheme(schemeId) {
         const schemes = this.getSavedSchemes();
-        const scheme = schemes.find(s => s.id === schemeId);
+        const scheme = this.getSchemeById(schemes, schemeId);
 
         if (!scheme) {
             this.showToast('方案不存在');
@@ -7379,12 +7283,12 @@ class TravelPlanner {
 
         // 检查是否有未保存的更改
         if (this.hasUnsavedChanges && this.travelList.length > 0) {
-            this.showUnsavedChangesDialog(schemeId, scheme.name);
+            this.showUnsavedChangesDialog(scheme.id, scheme.name);
             return;
         }
 
         // 执行实际的方案加载
-        this.performSchemeLoad(schemeId, scheme);
+        this.performSchemeLoad(scheme.id, scheme);
     }
 
     // 显示未保存更改对话框
@@ -7417,33 +7321,16 @@ class TravelPlanner {
 
     // 执行实际的方案加载
     performSchemeLoad(schemeId, scheme) {
-        // 保存当前方案标识
-        this.currentSchemeId = schemeId;
-        this.currentSchemeName = scheme.name;
-        this.hasUnsavedChanges = false; // 重置未保存状态
-        this.updatePageTitle(); // 更新页面标题
-
-        // 直接清除当前数据并加载新方案
-        this.travelList = [];
-        this.updateTravelList();
-        this.updateDistanceSummary(0, 0);
-        this.clearMarkers();
-
-        // 加载方案数据
-        this.travelList = [...scheme.travelList];
-        this.routeSegments.clear();
-        scheme.routeSegments.forEach(([key, value]) => {
-            this.routeSegments.set(key, value);
+        this.dispatch({
+            type: 'REPLACE_PLAN',
+            travelList: scheme.travelList,
+            routeSegments: scheme.routeSegments,
+            currentSchemeId: schemeId,
+            currentSchemeName: scheme.name,
+            hasUnsavedChanges: false,
+            markModified: false
         });
-
-        // 更新界面
-        this.updateTravelList();
-        this.calculateDistancesWithDebounce();
-
-        // 重新创建标记
-        this.clearMarkers();
-        this.travelList.forEach(place => this.addMarker(place));
-        this.drawRoute();
+        this.updatePageTitle();
 
         // 更新待定点按钮状态（不重置状态）
         this.updateTogglePendingButton();
@@ -7454,9 +7341,6 @@ class TravelPlanner {
         this.showToast(`已切换到方案"${scheme.name}"`);
         this.closeSaveSchemeModal();
 
-        // 保存数据，包括当前方案信息
-        this.saveData();
-
         // 更新方案列表显示当前方案
         setTimeout(() => this.loadSavedSchemes(), 100);
     }
@@ -7464,7 +7348,7 @@ class TravelPlanner {
     // 删除方案
     deleteScheme(schemeId) {
         const schemes = this.getSavedSchemes();
-        const scheme = schemes.find(s => s.id === schemeId);
+        const scheme = this.getSchemeById(schemes, schemeId);
 
         if (!scheme) {
             this.showToast('方案不存在');
@@ -7476,16 +7360,18 @@ class TravelPlanner {
         }
 
         // 如果删除的是当前方案，清空当前方案标识
-        if (this.currentSchemeId === schemeId) {
-            this.currentSchemeId = null;
-            this.currentSchemeName = null;
-            this.hasUnsavedChanges = this.travelList.length > 0; // 如果有数据则标记为未保存
-            this.updatePageTitle(); // 更新页面标题
-            this.saveData(); // 保存更新后的状态
+        if (String(this.currentSchemeId) === String(scheme.id)) {
+            this.dispatch({
+                type: 'SET_SCHEME_BINDING',
+                currentSchemeId: null,
+                currentSchemeName: null,
+                hasUnsavedChanges: this.travelList.length > 0
+            });
+            this.updatePageTitle();
         }
 
-        const filteredSchemes = schemes.filter(s => s.id !== schemeId);
-        localStorage.setItem('travelSchemes', JSON.stringify(filteredSchemes));
+        const filteredSchemes = schemes.filter(s => String(s.id) !== String(scheme.id));
+        localStorage.setItem('travelSchemes', JSON.stringify(ClientSecurity.sanitizePersistedRecord(filteredSchemes)));
 
         this.showToast(`方案"${scheme.name}"已删除`);
         this.loadSavedSchemes();
@@ -7503,7 +7389,7 @@ class TravelPlanner {
 
         if (currentFilter && currentFilter !== 'all') {
             // 检查过滤后是否有游玩点
-            const filteredPlaces = this.travelList.filter(place => {
+            const filteredPlaces = this.getUsablePlaces().filter(place => {
                 const cityName = this.extractCityFromAddress(place.address);
                 return cityName === currentFilter;
             });
@@ -7587,42 +7473,42 @@ class TravelPlanner {
     exportBackupVersion() {
         this.closeExportModal();
 
-        // 获取所有保存的方案
-        const allSchemes = this.getSavedSchemes();
+        try {
+            const allSchemes = ClientSecurity.sanitizePersistedRecord(this.getSavedSchemes());
+            const backupData = PlannerData.createBackup({
+                exportDate: new Date().toISOString(),
+                currentData: {
+                    travelList: this.travelList,
+                    routeSegments: Array.from(this.routeSegments.entries()),
+                    settings: this.getSafeSettings(),
+                    currentSchemeId: this.currentSchemeId,
+                    currentSchemeName: this.currentSchemeName,
+                    hasUnsavedChanges: this.hasUnsavedChanges
+                },
+                schemes: allSchemes
+            });
 
-        // 创建包含所有方案的备份数据
-        const backupData = {
-            version: '2.0', // 升级版本号以支持多方案
-            exportDate: new Date().toISOString(),
-            type: 'full-backup', // 标识这是完整备份
-            currentData: {
-                travelList: this.travelList,
-                routeSegments: Array.from(this.routeSegments.entries()),
-                settings: this.settings,
-                currentSchemeId: this.currentSchemeId,
-                currentSchemeName: this.currentSchemeName
-            },
-            schemes: allSchemes, // 包含所有保存的方案
-            totalSchemes: allSchemes.length,
-            totalPlaces: this.travelList.length,
-            allCities: this.getAllCities(),
-            exportSource: '17旅游规划助手',
-            formatDescription: '此文件包含所有保存的旅游方案，可导入到17旅游规划助手中'
-        };
+            const sanitizedBackup = ClientSecurity.sanitizePersistedRecord(backupData);
+            if (ClientSecurity.containsSensitiveField(sanitizedBackup)) {
+                throw new Error('备份安全检查失败');
+            }
+            const blob = new Blob([JSON.stringify(sanitizedBackup, null, 2)], { type: 'application/json;charset=utf-8' });
+            const url = URL.createObjectURL(blob);
 
-        const blob = new Blob([JSON.stringify(backupData, null, 2)], { type: 'application/json;charset=utf-8' });
-        const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            const dateStr = new Date().toLocaleDateString('zh-CN').replace(/\//g, '');
+            a.download = `17旅游方案全备份_${dateStr}.json`;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
 
-        const a = document.createElement('a');
-        a.href = url;
-        const dateStr = new Date().toLocaleDateString('zh-CN').replace(/\//g, '');
-        a.download = `17旅游方案全备份_${dateStr}.json`;
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-        URL.revokeObjectURL(url);
-
-        this.showToast(`备份导出成功，包含 ${allSchemes.length} 个方案`);
+            this.showToast(`备份导出成功，包含 ${allSchemes.length} 个方案`);
+        } catch (error) {
+            console.error('备份导出失败:', error);
+            this.showToast(`备份导出失败：${error.message}`);
+        }
     }
 
     // 处理文件拖拽悬停
@@ -7665,6 +7551,10 @@ class TravelPlanner {
             this.showToast('请选择JSON格式的备份文件');
             return;
         }
+        if (file.size > PlannerData.LIMITS.maxFileBytes) {
+            this.showToast(`备份文件过大，最大支持${PlannerData.LIMITS.maxFileBytes / 1024 / 1024}MB`);
+            return;
+        }
 
         const reader = new FileReader();
         reader.onload = (e) => {
@@ -7693,7 +7583,7 @@ class TravelPlanner {
         }
 
         // 检查数据版本和类型
-        if (data.version === '2.0' && data.type === 'full-backup') {
+        if (['2.0', '3.0', PlannerData.BACKUP_VERSION].includes(data.version) && data.type === 'full-backup') {
             // 新格式：包含多个方案的完整备份
             this.validateAndImportFullBackup(data);
         } else if (data.travelList && Array.isArray(data.travelList)) {
@@ -7707,52 +7597,36 @@ class TravelPlanner {
 
     // 验证并导入完整备份（新格式）
     validateAndImportFullBackup(data) {
-        // 验证必要字段
-        if (!data.schemes || !Array.isArray(data.schemes)) {
-            this.showToast('备份文件中缺少方案数据');
-            return;
+        try {
+            // 旧版本只在这里通过显式 migration 转换；校验函数本身从不改写输入。
+            const validated = data.version === PlannerData.BACKUP_VERSION &&
+                data.schemaVersion === PlannerData.SCHEMA_VERSION
+                ? PlannerData.validateBackup(data)
+                : PlannerData.migrateBackup(data);
+            this.checkSchemeConflicts(validated);
+        } catch (error) {
+            this.showToast(`备份校验失败：${error.message}`);
         }
-
-        // 验证每个方案的数据完整性
-        for (let scheme of data.schemes) {
-            if (!scheme.name || !scheme.travelList || !Array.isArray(scheme.travelList)) {
-                this.showToast('备份文件中的方案数据不完整');
-                return;
-            }
-
-            // 验证方案中的地点数据
-            for (let place of scheme.travelList) {
-                if (!place.id || !place.name || !place.address ||
-                    typeof place.lat !== 'number' || typeof place.lng !== 'number') {
-                    this.showToast('备份文件中的地点数据不完整');
-                    return;
-                }
-            }
-        }
-
-        // 检查方案冲突
-        this.checkSchemeConflicts(data);
     }
 
     // 验证并导入单个方案（旧格式）
     validateAndImportSingleScheme(data) {
-        // 验证每个地点的数据完整性
-        for (let place of data.travelList) {
-            if (!place.id || !place.name || !place.address ||
-                typeof place.lat !== 'number' || typeof place.lng !== 'number') {
-                this.showToast('备份文件中的地点数据不完整');
-                return;
-            }
+        let validated;
+        try {
+            validated = PlannerData.validatePlanData(data, 'travelData');
+        } catch (error) {
+            this.showToast(`备份校验失败：${error.message}`);
+            return;
         }
 
         // 确认导入
-        const confirmMessage = `即将导入 ${data.travelList.length} 个游玩地点，这将替换当前所有数据。是否继续？`;
+        const confirmMessage = `即将导入 ${validated.travelList.length} 个游玩地点，这将替换当前所有数据。是否继续？`;
         if (!confirm(confirmMessage)) {
             return;
         }
 
         // 执行导入
-        this.importTravelData(data);
+        this.importTravelData({ ...validated, exportDate: data.exportDate });
     }
 
     // 检查方案冲突
@@ -7836,203 +7710,190 @@ class TravelPlanner {
         // 创建冲突解决界面
         this.createConflictResolutionUI(conflicts);
 
-        // 显示模态框
-        document.getElementById('conflictResolutionModal').style.display = 'block';
+        this.dialogManager.open('conflictResolutionModal', {
+            initialFocus: 'input[type="radio"]:checked',
+            onRequestClose: () => this.closeConflictResolutionModal()
+        });
     }
 
     // 创建冲突解决界面
     createConflictResolutionUI(conflicts) {
         const container = document.getElementById('conflictList');
+        this.pendingConflicts = Array.isArray(conflicts) ? conflicts : [];
+        const fragment = document.createDocumentFragment();
 
-        container.innerHTML = conflicts.map((conflict, index) => {
+        const createSchemeSummary = (heading, scheme, className) => {
+            const summary = this.createElement('div', { className: `scheme-info ${className}` });
+            summary.appendChild(this.createElement('h5', { text: heading }));
+            this.appendLabeledText(summary, '名称:', String(scheme.name ?? ''));
+            this.appendLabeledText(summary, '地点数:', String(scheme.placesCount ?? 0));
+            this.appendLabeledText(summary, '创建时间:', new Date(scheme.createdAt).toLocaleString('zh-CN'));
+            if (scheme.modifiedAt) {
+                this.appendLabeledText(summary, '修改时间:', new Date(scheme.modifiedAt).toLocaleString('zh-CN'));
+            }
+            return summary;
+        };
+
+        const createOption = (index, value, labelText, checked = false) => {
+            const label = this.createElement('label');
+            const radio = this.createElement('input', {
+                type: 'radio',
+                dataset: { conflictIndex: index }
+            });
+            radio.name = `resolution_${index}`;
+            radio.value = value;
+            radio.checked = checked;
+            label.append(radio, this.createElement('span', { text: labelText }));
+            return label;
+        };
+
+        this.pendingConflicts.forEach((conflict, index) => {
             const importScheme = conflict.importScheme;
             const existingScheme = conflict.existingScheme;
 
-            return `
-                <div class="conflict-item">
-                    <div class="conflict-header">
-                        <h4>冲突 ${index + 1}: "${importScheme.name}"</h4>
-                                                <div class="conflict-type ${conflict.conflictType === 'version' ?
-                    (conflict.isIdentical ? 'version-identical' : (conflict.isNewer ? 'version-newer' : 'version-older')) :
-                    'name-conflict'}">
-                            ${conflict.conflictType === 'version' ?
-                    (conflict.isIdentical ? '🔄 完全相同' : (conflict.isNewer ? '⬆️ 版本更新' : '⬇️ 版本较旧')) :
-                    '📝 同名方案'}
-                        </div>
-                    </div>
-
-                    <div class="conflict-details">
-                        <div class="scheme-comparison">
-                            <div class="scheme-info existing">
-                                <h5>现有方案</h5>
-                                <p><strong>名称:</strong> ${existingScheme.name}</p>
-                                <p><strong>地点数:</strong> ${existingScheme.placesCount}</p>
-                                <p><strong>创建时间:</strong> ${new Date(existingScheme.createdAt).toLocaleString('zh-CN')}</p>
-                                ${existingScheme.modifiedAt ? `<p><strong>修改时间:</strong> ${new Date(existingScheme.modifiedAt).toLocaleString('zh-CN')}</p>` : ''}
-                            </div>
-
-                            <div class="scheme-info importing">
-                                <h5>要导入的方案</h5>
-                                <p><strong>名称:</strong> ${importScheme.name}</p>
-                                <p><strong>地点数:</strong> ${importScheme.placesCount}</p>
-                                <p><strong>创建时间:</strong> ${new Date(importScheme.createdAt).toLocaleString('zh-CN')}</p>
-                                ${importScheme.modifiedAt ? `<p><strong>修改时间:</strong> ${new Date(importScheme.modifiedAt).toLocaleString('zh-CN')}</p>` : ''}
-                            </div>
-                        </div>
-                    </div>
-
-                    <div class="conflict-resolution">
-                        <h5>选择处理方式:</h5>
-                        <div class="resolution-options">
-                            ${conflict.conflictType === 'version' ? `
-                                ${conflict.isIdentical ? `
-                                    <label>
-                                        <input type="radio" name="resolution_${index}" value="skip" checked />
-                                        <span>跳过此方案（推荐）</span>
-                                    </label>
-                                    <label>
-                                        <input type="radio" name="resolution_${index}" value="both" />
-                                        <span>保留副本</span>
-                                    </label>
-                                ` : `
-                                    <label>
-                                        <input type="radio" name="resolution_${index}" value="update" ${conflict.isNewer ? 'checked' : ''} />
-                                        <span>${conflict.isNewer ? '更新到新版本（推荐）' : '更新到此版本'}</span>
-                                    </label>
-                                    <label>
-                                        <input type="radio" name="resolution_${index}" value="keep" ${!conflict.isNewer ? 'checked' : ''} />
-                                        <span>保留现有版本</span>
-                                    </label>
-                                    <label>
-                                        <input type="radio" name="resolution_${index}" value="both" />
-                                        <span>同时保留两个版本</span>
-                                    </label>
-                                `}
-                            ` : `
-                                <label>
-                                    <input type="radio" name="resolution_${index}" value="overwrite" />
-                                    <span>覆盖现有方案</span>
-                                </label>
-                                <label>
-                                    <input type="radio" name="resolution_${index}" value="rename" checked />
-                                    <span>重命名导入（推荐）</span>
-                                </label>
-                                <label>
-                                    <input type="radio" name="resolution_${index}" value="skip" />
-                                    <span>跳过此方案</span>
-                                </label>
-                            `}
-                        </div>
-
-                        <div class="rename-input" id="renameInput_${index}" ${conflict.conflictType === 'version' ? 'style="display: none;"' : ''}>
-                            <div class="rename-header">
-                                <div class="rename-label">冲突方案重命名为：</div>
-                                <div class="rename-warning" id="renameWarning_${index}" style="display: none;">
-                                    ⚠️ 名称已存在
-                                </div>
-                            </div>
-                            <input type="text" placeholder="输入新名称..."
-                                   value="${importScheme.name} (导入)"
-                                   id="newName_${index}" />
-                        </div>
-                    </div>
-                </div>
-            `;
-        }).join('');
-
-        // 添加事件监听器
-        container.querySelectorAll('input[type="radio"]').forEach(radio => {
-            radio.addEventListener('change', (e) => {
-                const index = e.target.name.split('_')[1];
-                const renameInput = document.getElementById(`renameInput_${index}`);
-
-                if (e.target.value === 'rename' || e.target.value === 'both') {
-                    renameInput.style.display = 'block';
-                    if (e.target.value === 'both') {
-                        // 为版本冲突的"同时保留"选项设置不同的默认名称
-                        const newNameInput = document.getElementById(`newName_${index}`);
-                        const conflicts = document.querySelectorAll('.conflict-item');
-                        const conflictItem = conflicts[index];
-                        const schemeName = conflictItem.querySelector('h4').textContent.match(/"([^"]+)"/)[1];
-                        const currentTime = new Date().toLocaleDateString('zh-CN');
-                        newNameInput.value = `${schemeName} (${currentTime})`;
-                    }
-                    // 添加输入检查事件监听器
-                    const newNameInput = document.getElementById(`newName_${index}`);
-                    this.addRenameInputListener(newNameInput, index);
-                } else {
-                    renameInput.style.display = 'none';
-                }
+            const item = this.createElement('div', {
+                className: 'conflict-item',
+                dataset: { conflictIndex: index }
             });
-        });
+            const header = this.createElement('div', { className: 'conflict-header' });
+            header.appendChild(this.createElement('h4', {
+                text: `冲突 ${index + 1}: "${String(importScheme.name ?? '')}"`
+            }));
+            const conflictClass = conflict.conflictType === 'version'
+                ? (conflict.isIdentical ? 'version-identical' : (conflict.isNewer ? 'version-newer' : 'version-older'))
+                : 'name-conflict';
+            const conflictText = conflict.conflictType === 'version'
+                ? (conflict.isIdentical ? '🔄 完全相同' : (conflict.isNewer ? '⬆️ 版本更新' : '⬇️ 版本较旧'))
+                : '📝 同名方案';
+            header.appendChild(this.createElement('div', {
+                className: `conflict-type ${conflictClass}`,
+                text: conflictText
+            }));
 
-        // 为已显示的重命名输入框添加监听器
-        container.querySelectorAll('.rename-input').forEach((renameInput, index) => {
-            if (renameInput.style.display !== 'none') {
-                const newNameInput = document.getElementById(`newName_${index}`);
-                if (newNameInput) {
-                    this.addRenameInputListener(newNameInput, index);
-                }
+            const details = this.createElement('div', { className: 'conflict-details' });
+            const comparison = this.createElement('div', { className: 'scheme-comparison' });
+            comparison.append(
+                createSchemeSummary('现有方案', existingScheme, 'existing'),
+                createSchemeSummary('要导入的方案', importScheme, 'importing')
+            );
+            details.appendChild(comparison);
+
+            const resolution = this.createElement('div', { className: 'conflict-resolution' });
+            const resolutionTitle = this.createElement('h5', {
+                id: `resolutionTitle_${index}`,
+                text: '选择处理方式:'
+            });
+            resolution.appendChild(resolutionTitle);
+            const options = this.createElement('div', { className: 'resolution-options' });
+            options.setAttribute('role', 'radiogroup');
+            options.setAttribute('aria-labelledby', resolutionTitle.id);
+            if (conflict.conflictType === 'version' && conflict.isIdentical) {
+                options.append(
+                    createOption(index, 'skip', '跳过此方案（推荐）', true),
+                    createOption(index, 'both', '保留副本')
+                );
+            } else if (conflict.conflictType === 'version') {
+                options.append(
+                    createOption(index, 'update', conflict.isNewer ? '更新到新版本（推荐）' : '更新到此版本', conflict.isNewer),
+                    createOption(index, 'keep', '保留现有版本', !conflict.isNewer),
+                    createOption(index, 'both', '同时保留两个版本')
+                );
+            } else {
+                options.append(
+                    createOption(index, 'overwrite', '覆盖现有方案'),
+                    createOption(index, 'rename', '重命名导入（推荐）', true),
+                    createOption(index, 'skip', '跳过此方案')
+                );
+            }
+
+            const rename = this.createElement('div', { className: 'rename-input', id: `renameInput_${index}` });
+            rename.style.display = conflict.conflictType === 'version' ? 'none' : 'block';
+            const renameHeader = this.createElement('div', { className: 'rename-header' });
+            const renameLabelId = `renameLabel_${index}`;
+            renameHeader.append(
+                this.createElement('div', {
+                    className: 'rename-label',
+                    id: renameLabelId,
+                    text: '冲突方案重命名为：'
+                }),
+                this.createElement('div', {
+                    className: 'rename-warning',
+                    id: `renameWarning_${index}`,
+                    text: '⚠️ 名称已存在'
+                })
+            );
+            renameHeader.lastElementChild.style.display = 'none';
+            const newName = this.createElement('input', {
+                id: `newName_${index}`,
+                type: 'text',
+                attributes: { 'aria-labelledby': renameLabelId }
+            });
+            newName.placeholder = '输入新名称...';
+            newName.value = `${String(importScheme.name ?? '')} (导入)`;
+            newName.maxLength = 100;
+            rename.append(renameHeader, newName);
+            resolution.append(options, rename);
+            item.append(header, details, resolution);
+            fragment.appendChild(item);
+
+            if (rename.style.display !== 'none') {
+                this.addRenameInputListener(newName, index);
             }
         });
+
+        container.replaceChildren(fragment);
     }
 
     // 导入旅游数据（旧格式）
     importTravelData(data) {
         try {
-            // 清除当前数据
-            this.travelList = [];
-            this.updateTravelList();
-            this.updateDistanceSummary(0, 0);
-            this.clearMarkers();
+            const nextCurrentData = {
+                travelList: data.travelList,
+                routeSegments: data.routeSegments,
+                settings: this.getSafeSettings(),
+                currentSchemeId: null,
+                currentSchemeName: null,
+                hasUnsavedChanges: data.travelList.length > 0
+            };
+            // 先把数据、方案绑定和 dirty 状态作为一个事务持久化；成功后才更新内存与 UI。
+            const committed = PlannerData.commitImportTransaction(localStorage, {
+                schemes: this.getSavedSchemes(),
+                currentData: nextCurrentData
+            });
 
-            // 导入新数据
-            this.travelList = [...data.travelList];
-
-            // 恢复路线段配置
-            this.routeSegments.clear();
-            if (data.routeSegments && Array.isArray(data.routeSegments)) {
-                data.routeSegments.forEach(([key, value]) => {
-                    this.routeSegments.set(key, value);
-                });
-            }
-
-            // 更新界面
-            this.updateTravelList();
-            this.calculateDistancesWithDebounce();
-
-            // 重新创建标记和路线
-            this.travelList.forEach(place => this.addMarker(place));
-            this.drawRoute();
+            this.dispatch({
+                type: 'REPLACE_PLAN',
+                travelList: committed.currentData.travelList,
+                routeSegments: committed.currentData.routeSegments,
+                currentSchemeId: committed.currentData.currentSchemeId,
+                currentSchemeName: committed.currentData.currentSchemeName,
+                hasUnsavedChanges: committed.currentData.hasUnsavedChanges,
+                markModified: false,
+                persist: false
+            });
 
             // 更新待定点按钮状态（不重置状态）
             this.updateTogglePendingButton();
 
-            // 保存数据
-            this.saveData();
-
-            // 清空当前方案状态（因为导入的是新数据）
-            this.currentSchemeId = null;
-            this.currentSchemeName = null;
-            this.hasUnsavedChanges = true; // 导入后标记为未保存
-            this.updatePageTitle(); // 更新页面标题
+            this.updatePageTitle();
 
             // 显示成功消息
-            this.showToast(`成功导入 ${data.travelList.length} 个游玩地点`);
+            const importedUsableCount = this.getUsablePlaces(data.travelList).length;
+            this.showToast(`成功导入 ${importedUsableCount} 个有效游玩地点`);
             this.closeImportModal();
 
             // 重新加载方案列表
             this.loadSavedSchemes();
 
             console.log('数据导入成功:', {
-                places: data.travelList.length,
+                places: importedUsableCount,
                 cities: data.cities?.length || this.getAllCities().length,
                 exportDate: data.exportDate
             });
 
         } catch (error) {
             console.error('数据导入失败:', error);
-            this.showToast('导入失败，请检查文件格式');
+            this.showToast(`导入失败：${error.message}`);
         }
     }
 
@@ -8042,16 +7903,23 @@ class TravelPlanner {
             const existingSchemes = this.getSavedSchemes();
             const importedSchemes = [];
             const skippedSchemes = [];
+            const importedIdMap = new Map();
 
             // 处理每个方案
-            for (let importScheme of importData.schemes) {
+            for (const sourceScheme of importData.schemes) {
+                const originalId = String(sourceScheme.id);
+                const importScheme = PlannerData.validateScheme(sourceScheme);
                 // 检查是否有冲突解决方案（只在有冲突时才存在）
                 const resolution = this.conflictResolutions.get(importScheme.uuid || importScheme.name);
+                const existingIndex = existingSchemes.findIndex(existing =>
+                    (importScheme.uuid && existing.uuid === importScheme.uuid) || existing.name === importScheme.name
+                );
 
                 if (resolution === 'skip' || resolution === 'keep') {
                     if (resolution === 'skip') {
                         skippedSchemes.push(importScheme.name);
                     }
+                    if (existingIndex !== -1) importedIdMap.set(originalId, existingSchemes[existingIndex].id);
                     continue;
                 }
 
@@ -8064,7 +7932,6 @@ class TravelPlanner {
                 // 处理重命名或同时保留两个版本
                 if (resolution && (resolution.startsWith('rename:') || resolution.startsWith('both:'))) {
                     const newName = resolution.substring(resolution.indexOf(':') + 1);
-                    const originalUUID = importScheme.uuid;
                     importScheme.name = newName;
                     // 重新生成UUID以避免冲突
                     const createdAt = importScheme.createdAt || new Date().toISOString();
@@ -8075,55 +7942,59 @@ class TravelPlanner {
 
                 // 处理覆盖或更新
                 if (resolution === 'overwrite' || resolution === 'update') {
-                    // 找到要覆盖的方案并移除
-                    const existingIndex = existingSchemes.findIndex(existing =>
-                        existing.name === importScheme.name ||
-                        (existing.uuid === importScheme.uuid && !resolution.startsWith('rename:') && !resolution.startsWith('both:'))
-                    );
                     if (existingIndex !== -1) {
+                        importScheme.id = existingSchemes[existingIndex].id;
                         existingSchemes.splice(existingIndex, 1);
+                    } else {
+                        importScheme.id = this.generateUniqueSchemeId();
                     }
-                } else {
+                } else if (!(resolution && (resolution.startsWith('rename:') || resolution.startsWith('both:')))) {
                     // 对于其他情况（直接导入），也生成新的ID以避免冲突
                     importScheme.id = this.generateUniqueSchemeId();
                 }
 
+                importScheme.placesCount = this.getUsablePlaces(importScheme.travelList).length;
+                importScheme.version = PlannerData.BACKUP_VERSION;
                 importedSchemes.push(importScheme);
+                importedIdMap.set(originalId, importScheme.id);
             }
 
-            // 合并方案
             const allSchemes = [...existingSchemes, ...importedSchemes];
-            localStorage.setItem('travelSchemes', JSON.stringify(allSchemes));
+            const sourceCurrentId = importData.currentData.currentSchemeId;
+            const mappedCurrentId = sourceCurrentId == null
+                ? null
+                : importedIdMap.get(String(sourceCurrentId));
+            const currentScheme = mappedCurrentId == null
+                ? null
+                : allSchemes.find(scheme => String(scheme.id) === String(mappedCurrentId));
+            const nextCurrentData = {
+                travelList: importData.currentData.travelList,
+                routeSegments: importData.currentData.routeSegments,
+                settings: this.getSafeSettings(),
+                currentSchemeId: currentScheme ? currentScheme.id : null,
+                currentSchemeName: currentScheme ? currentScheme.name : null,
+                hasUnsavedChanges: currentScheme
+                    ? importData.currentData.hasUnsavedChanges === true
+                    : importData.currentData.travelList.length > 0
+            };
 
-            // 导入当前数据（如果有）
-            if (importData.currentData && importData.currentData.travelList) {
-                this.travelList = [];
-                this.updateTravelList();
-                this.updateDistanceSummary(0, 0);
-                this.clearMarkers();
+            // 两个 localStorage 键先原子提交；配额或权限错误会恢复原值，内存尚未改变。
+            const committed = PlannerData.commitImportTransaction(localStorage, {
+                schemes: allSchemes,
+                currentData: nextCurrentData
+            });
 
-                // 导入当前数据
-                this.travelList = [...importData.currentData.travelList];
-
-                // 恢复路线段配置
-                this.routeSegments.clear();
-                if (importData.currentData.routeSegments && Array.isArray(importData.currentData.routeSegments)) {
-                    importData.currentData.routeSegments.forEach(([key, value]) => {
-                        this.routeSegments.set(key, value);
-                    });
-                }
-
-                // 更新界面
-                this.updateTravelList();
-                this.calculateDistancesWithDebounce();
-
-                // 重新创建标记和路线
-                this.travelList.forEach(place => this.addMarker(place));
-                this.drawRoute();
-
-                // 保存数据
-                this.saveData();
-            }
+            this.dispatch({
+                type: 'REPLACE_PLAN',
+                travelList: committed.currentData.travelList,
+                routeSegments: committed.currentData.routeSegments,
+                currentSchemeId: committed.currentData.currentSchemeId,
+                currentSchemeName: committed.currentData.currentSchemeName,
+                hasUnsavedChanges: committed.currentData.hasUnsavedChanges,
+                markModified: false,
+                persist: false
+            });
+            this.updatePageTitle();
 
             // 显示成功消息
             let message = `成功导入 ${importedSchemes.length} 个方案`;
@@ -8143,7 +8014,7 @@ class TravelPlanner {
             if (bothCount > 0) message += `，保留副本 ${bothCount} 个`;
 
             if (importData.currentData && importData.currentData.travelList) {
-                message += `，当前显示 ${importData.currentData.travelList.length} 个地点`;
+                message += `，当前显示 ${this.getUsablePlaces(importData.currentData.travelList).length} 个有效地点`;
             }
 
             this.showToast(message);
@@ -8162,7 +8033,7 @@ class TravelPlanner {
 
         } catch (error) {
             console.error('完整备份导入失败:', error);
-            this.showToast('导入失败，请检查文件格式');
+            this.showToast(`导入失败：${error.message}`);
         }
     }
 
@@ -8227,38 +8098,33 @@ class TravelPlanner {
 
         if (!schemeName) {
             // 名称为空
-            warning.style.display = 'none';
+            warning.hidden = true;
             saveBtn.disabled = true;
             return;
         }
 
         if (!this.validateSchemeName(schemeName)) {
             // 名称重复
-            warning.style.display = 'block';
+            warning.hidden = false;
             saveBtn.disabled = true;
         } else {
             // 名称可用
-            warning.style.display = 'none';
+            warning.hidden = true;
             saveBtn.disabled = false;
         }
     }
 
     // 处理冲突解决
     processConflictResolution() {
-        const conflicts = document.querySelectorAll('.conflict-item');
         this.conflictResolutions.clear();
 
-        for (let i = 0; i < conflicts.length; i++) {
+        for (let i = 0; i < this.pendingConflicts.length; i++) {
             const selectedRadio = document.querySelector(`input[name="resolution_${i}"]:checked`);
             if (!selectedRadio) continue;
 
             const resolution = selectedRadio.value;
-            const conflictItem = conflicts[i];
-            const schemeName = conflictItem.querySelector('h4').textContent.match(/"([^"]+)"/)[1];
-
-            // 从冲突数据中获取UUID
-            const conflictData = this.pendingImportData.schemes.find(scheme => scheme.name === schemeName);
-            const schemeKey = conflictData ? conflictData.uuid : schemeName;
+            const conflictData = this.pendingConflicts[i].importScheme;
+            const schemeKey = conflictData.uuid || String(conflictData.name ?? '');
 
             if (resolution === 'rename' || resolution === 'both') {
                 const newNameInput = document.getElementById(`newName_${i}`);
@@ -8287,8 +8153,9 @@ class TravelPlanner {
 
     // 关闭冲突解决模态框
     closeConflictResolutionModal() {
-        document.getElementById('conflictResolutionModal').style.display = 'none';
+        this.dialogManager.close('conflictResolutionModal');
         this.pendingImportData = null;
+        this.pendingConflicts = [];
         this.conflictResolutions.clear();
         // 确保导入模态框也被关闭
         this.closeImportModal();
@@ -8296,41 +8163,13 @@ class TravelPlanner {
 
     // 截取地图截图
     async captureMapScreenshot() {
-        console.log('📸 ===== 开始地图截图流程 =====');
-
         try {
-            // 方法1: 简化的html2canvas截图
+            const staticMapResult = await this.generateStaticMapImage();
+            if (staticMapResult) return staticMapResult;
             const html2canvasResult = await this.tryHtml2canvasScreenshot();
-            if (html2canvasResult) {
-                console.log('✅ html2canvas截图成功');
-                return html2canvasResult;
-            }
-
-            // 方法2: 尝试Google Maps静态地图（如果有API key）
-            const googleApiKey = this.getApiKey('google');
-            if (googleApiKey && googleApiKey.length > 10) {
-                console.log('🎯 尝试生成Google Maps静态地图...');
-                const staticMapResult = await this.generateStaticMapImage();
-                if (staticMapResult) {
-                    console.log('✅ Google Maps静态地图生成成功');
-                    return staticMapResult;
-                }
-            }
-
-            // 方法3: 生成基于文本的地图占位符
-            console.log('🎯 生成文本地图占位符...');
-            const textMapResult = this.generateTextMapPlaceholder();
-            if (textMapResult) {
-                console.log('✅ 文本地图占位符生成成功');
-                return textMapResult;
-            }
-
-            console.log('❌ 所有截图方法都失败了');
-            return null;
-
+            return html2canvasResult || this.generateTextMapPlaceholder();
         } catch (error) {
-            console.error('❌ 截图过程发生错误:', error);
-            return null;
+            return this.generateTextMapPlaceholder();
         }
     }
 
@@ -8423,7 +8262,8 @@ class TravelPlanner {
     // 生成基于文本的地图占位符
     generateTextMapPlaceholder() {
         try {
-            if (this.travelList.length === 0) {
+            const usablePlaces = this.getUsablePlaces();
+            if (usablePlaces.length === 0) {
                 return null;
             }
 
@@ -8451,7 +8291,7 @@ class TravelPlanner {
             // 副标题
             ctx.fillStyle = '#7f8c8d';
             ctx.font = '16px Arial, sans-serif';
-            ctx.fillText(`共 ${this.travelList.length} 个游玩点`, 400, 80);
+            ctx.fillText(`共 ${usablePlaces.length} 个游玩点`, 400, 80);
 
             // 游玩点列表
             ctx.textAlign = 'left';
@@ -8463,7 +8303,7 @@ class TravelPlanner {
             const maxItemsPerColumn = 12;
             const columnWidth = 380;
 
-            this.travelList.forEach((place, index) => {
+            usablePlaces.forEach((place, index) => {
                 const column = Math.floor(index / maxItemsPerColumn);
                 const row = index % maxItemsPerColumn;
 
@@ -8495,11 +8335,11 @@ class TravelPlanner {
             });
 
             // 如果游玩点太多，显示省略提示
-            if (this.travelList.length > 24) {
+            if (usablePlaces.length > 24) {
                 ctx.fillStyle = '#95a5a6';
                 ctx.font = '14px Arial, sans-serif';
                 ctx.textAlign = 'center';
-                ctx.fillText(`还有 ${this.travelList.length - 24} 个游玩点...`, 400, 540);
+                ctx.fillText(`还有 ${usablePlaces.length - 24} 个游玩点...`, 400, 540);
             }
 
             // 底部提示
@@ -8516,117 +8356,52 @@ class TravelPlanner {
         }
     }
 
-    // 生成Google Maps静态地图
+    // 静态地图只从固定 BFF 端点取得图片字节；浏览器永不接收 provider URL 或服务端 Key。
     async generateStaticMapImage() {
         try {
-            if (this.travelList.length === 0) {
-                console.log('📍 无游玩点，跳过静态地图生成');
-                return null;
-            }
-
-            // 计算地图中心点和缩放级别
-            const bounds = this.calculateMapBounds();
-            if (!bounds) {
-                console.log('📏 无法计算地图边界');
-                return null;
-            }
-
-            const center = bounds.center;
-            const zoom = Math.min(Math.max(bounds.zoom, 8), 15); // 限制缩放级别
-
-            // 构建标记参数
-            const markers = this.travelList.map((place, index) => {
-                const label = String.fromCharCode(65 + (index % 26)); // A, B, C...
-                return `markers=color:red%7Clabel:${label}%7C${place.lat},${place.lng}`;
-            }).join('&');
-
-            // 构建路径参数（如果有多个点）
-            let pathParam = '';
-            if (this.travelList.length > 1) {
-                const pathPoints = this.travelList.map(place => `${place.lat},${place.lng}`).join('|');
-                pathParam = `&path=color:0x0000ff|weight:3|${pathPoints}`;
-            }
-
-            // 获取Google API密钥
-            const googleApiKey = this.getApiKey('google');
-
-            // 构建静态地图URL
-            if (!googleApiKey) {
-                console.warn('⚠️ 未配置Google Maps API密钥，无法生成静态地图');
-                return null;
-            }
-
-            const staticMapUrl = `https://maps.googleapis.com/maps/api/staticmap?` +
-                `center=${center.lat},${center.lng}` +
-                `&zoom=${zoom}` +
-                `&size=800x600` +
-                `&maptype=roadmap` +
-                `&${markers}` +
-                `${pathParam}` +
-                `&key=${googleApiKey}`;
-
-            console.log('🌐 静态地图URL构建完成');
-
-            // 尝试加载静态地图
-            return new Promise((resolve) => {
-                const img = new Image();
-                img.crossOrigin = 'anonymous';
-
-                img.onload = () => {
-                    try {
-                        // 将图片转换为base64
-                        const canvas = document.createElement('canvas');
-                        canvas.width = img.width;
-                        canvas.height = img.height;
-                        const ctx = canvas.getContext('2d');
-                        ctx.drawImage(img, 0, 0);
-                        const dataURL = canvas.toDataURL('image/png', 0.9);
-                        console.log('✅ 静态地图转换成功');
-                        resolve(dataURL);
-                    } catch (error) {
-                        console.error('❌ 静态地图转换失败:', error);
-                        resolve(null);
-                    }
-                };
-
-                img.onerror = () => {
-                    console.error('❌ 静态地图加载失败');
-                    resolve(null);
-                };
-
-                // 设置超时
-                setTimeout(() => {
-                    console.warn('⏰ 静态地图加载超时');
-                    resolve(null);
-                }, 10000);
-
-                img.src = staticMapUrl;
+            const validPlaces = this.getUsablePlaces();
+            if (validPlaces.length === 0) return null;
+            const provider = ['google', 'azure'].includes(this.settings.selectedMapApi)
+                ? this.settings.selectedMapApi
+                : 'google';
+            const blob = await this.bff.staticMap({
+                provider,
+                points: validPlaces.slice(0, 50).map(place => ({ lat: place.lat, lng: place.lng })),
+                width: 800,
+                height: 600,
+                drawPath: validPlaces.length > 1
             });
-
+            if (!(blob instanceof Blob) || !['image/png', 'image/jpeg'].includes(blob.type)) return null;
+            return await new Promise((resolve, reject) => {
+                const reader = new FileReader();
+                reader.onload = () => resolve(typeof reader.result === 'string' ? reader.result : null);
+                reader.onerror = () => reject(new Error('static map decode failed'));
+                reader.readAsDataURL(blob);
+            });
         } catch (error) {
-            console.error('❌ 静态地图生成失败:', error);
             return null;
         }
     }
 
     // 计算地图边界和缩放级别
-    calculateMapBounds() {
-        if (this.travelList.length === 0) return null;
+    calculateMapBounds(places = this.getUsablePlaces()) {
+        places = this.getUsablePlaces(places);
+        if (places.length === 0) return null;
 
-        if (this.travelList.length === 1) {
+        if (places.length === 1) {
             return {
-                center: { lat: this.travelList[0].lat, lng: this.travelList[0].lng },
+                center: { lat: places[0].lat, lng: places[0].lng },
                 zoom: 14
             };
         }
 
         // 计算边界
-        let minLat = this.travelList[0].lat;
-        let maxLat = this.travelList[0].lat;
-        let minLng = this.travelList[0].lng;
-        let maxLng = this.travelList[0].lng;
+        let minLat = places[0].lat;
+        let maxLat = places[0].lat;
+        let minLng = places[0].lng;
+        let maxLng = places[0].lng;
 
-        this.travelList.forEach(place => {
+        places.forEach(place => {
             minLat = Math.min(minLat, place.lat);
             maxLat = Math.max(maxLat, place.lat);
             minLng = Math.min(minLng, place.lng);
@@ -8708,18 +8483,18 @@ class TravelPlanner {
     async prepareMapForScreenshot() {
         console.log('🎯 开始准备地图状态用于截图...');
 
-        // 如果没有游玩点，直接返回
-        if (this.travelList.length === 0) {
+        const usablePlaces = this.getUsablePlaces();
+        if (usablePlaces.length === 0) {
             console.log('❌ 没有游玩点，跳过地图准备');
             return;
         }
 
         // 截图时优先显示所有游玩点，除非用户明确只想要某个城市的截图
-        let placesToShow = this.travelList;
+        let placesToShow = usablePlaces;
 
         // 只有在有城市过滤且确实需要过滤时才使用过滤
         if (this.currentCityFilter && this.currentCityFilter !== 'all') {
-            const filteredPlaces = this.travelList.filter(place => {
+            const filteredPlaces = usablePlaces.filter(place => {
                 const cityName = this.extractCityFromAddress(place.address);
                 return cityName === this.currentCityFilter;
             });
@@ -8772,6 +8547,7 @@ class TravelPlanner {
 
     // 验证所有游玩点是否都在当前地图边界内
     async verifyAllPlacesInBounds(places) {
+        places = this.getUsablePlaces(places);
         return new Promise((resolve) => {
             const checkBounds = () => {
                 const currentBounds = this.map.getBounds();
@@ -8818,6 +8594,7 @@ class TravelPlanner {
 
     // 找到游玩点的四边边界点
     findBoundaryPoints(places) {
+        places = this.getUsablePlaces(places);
         if (places.length === 0) return null;
 
         let northernmost = places[0]; // 最北（纬度最大）
@@ -8915,265 +8692,33 @@ class TravelPlanner {
 
     // 动态加载html2canvas库
     async loadHtml2Canvas() {
-        return new Promise((resolve, reject) => {
-            if (typeof html2canvas !== 'undefined') {
-                resolve();
-                return;
-            }
-
-            // 多个CDN备选源
-            const cdnSources = [
-                'https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js',
-                'https://unpkg.com/html2canvas@1.4.1/dist/html2canvas.min.js',
-                'https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js'
-            ];
-
-            let currentIndex = 0;
-
-            const tryLoadNext = () => {
-                if (currentIndex >= cdnSources.length) {
-                    reject(new Error('所有CDN源都加载失败'));
-                    return;
-                }
-
-                console.log(`📦 尝试从CDN ${currentIndex + 1}/${cdnSources.length} 加载html2canvas...`);
-
-                const script = document.createElement('script');
-                script.src = cdnSources[currentIndex];
-
-                // 设置超时
-                const timeout = setTimeout(() => {
-                    console.warn(`⏰ CDN ${currentIndex + 1} 加载超时`);
-                    script.remove();
-                    currentIndex++;
-                    tryLoadNext();
-                }, 10000); // 10秒超时
-
-                script.onload = () => {
-                    clearTimeout(timeout);
-                    console.log(`✅ html2canvas从CDN ${currentIndex + 1} 加载成功`);
-                    // 验证html2canvas确实可用
-                    if (typeof html2canvas !== 'undefined') {
-                        resolve();
-                    } else {
-                        console.warn(`⚠️ CDN ${currentIndex + 1} 脚本加载但html2canvas未定义`);
-                        currentIndex++;
-                        tryLoadNext();
-                    }
-                };
-
-                script.onerror = () => {
-                    clearTimeout(timeout);
-                    console.warn(`❌ CDN ${currentIndex + 1} 加载失败`);
-                    currentIndex++;
-                    tryLoadNext();
-                };
-
-                document.head.appendChild(script);
-            };
-
-            tryLoadNext();
-        });
+        if (typeof html2canvas === 'function') return;
+        throw new Error('html2canvas must be self-hosted and loaded by the application shell');
     }
 
     // 生成分享用的HTML文件
     generateShareHTML(mapScreenshot = null) {
-        const cities = this.getAllCities();
         const currentDate = new Date().toLocaleDateString('zh-CN');
+        const shareMetrics = PlannerData.toShareMetrics(this.totalMetrics);
+        const usablePlaces = this.getUsablePlaces();
 
-        let totalDistance = 0;
-        let totalTime = 0;
-
-        // 计算总距离和时间
-        const distanceEl = document.getElementById('totalDistance');
-        const timeEl = document.getElementById('estimatedTime');
-        if (distanceEl && timeEl) {
-            const distanceText = distanceEl.textContent.replace(/[^0-9.]/g, '');
-            const timeText = timeEl.textContent.replace(/[^0-9.]/g, '');
-            totalDistance = parseFloat(distanceText) || 0;
-            totalTime = parseFloat(timeText) || 0;
-        }
-
-        // 构建地图区域HTML
-        const currentFilter = this.currentCityFilter;
-        const mapTitle = currentFilter && currentFilter !== 'all' ?
-            `🗺️ ${currentFilter} - 路线地图` : '🗺️ 完整路线地图';
-        const mapDescription = currentFilter && currentFilter !== 'all' ?
-            `显示 ${currentFilter} 地区的游玩点和路线` : '显示所有游玩点和完整路线';
-
-        const mapSection = mapScreenshot ? `
-        <div class="map-section">
-            <h2>${mapTitle}</h2>
-            <p class="map-description">${mapDescription}</p>
-            <div class="map-container">
-                <img src="${mapScreenshot}" alt="旅游路线地图" class="map-image">
-            </div>
-            <p class="map-note">📍 高清地图截图 | 🔴 红色标记：游玩点 | 🌈 多彩路线：每段使用不同颜色便于区分</p>
-        </div>` : `
-        <div class="map-section">
-            <h2>${mapTitle}</h2>
-            <p class="map-description">${mapDescription}</p>
-            <div class="map-placeholder">
-                <div class="placeholder-icon">🗺️</div>
-                <p>地图截图生成失败</p>
-                <p>请在原网页中查看完整地图</p>
-            </div>
-        </div>`;
-
-        return `<!DOCTYPE html>
-<html lang="zh-CN">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>我的旅游计划 - ${currentDate}</title>
-    <style>
-        * { margin: 0; padding: 0; box-sizing: border-box; }
-        body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-            line-height: 1.6; color: #333; background: #f8f9fa; min-height: 100vh;
-        }
-        .container { width: 100%; margin: 0 auto; padding: 20px; }
-        .header {
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            color: white; padding: 30px; border-radius: 15px; text-align: center; margin-bottom: 30px;
-        }
-        .header h1 { font-size: 2.5rem; margin-bottom: 10px; }
-        .header p { font-size: 1.1rem; opacity: 0.9; }
-        .stats {
-            display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-            gap: 20px; margin-bottom: 30px;
-        }
-        .stat-card {
-            background: white; padding: 20px; border-radius: 10px; text-align: center;
-            box-shadow: 0 4px 15px rgba(0,0,0,0.1);
-        }
-        .stat-number { font-size: 2rem; font-weight: bold; color: #667eea; }
-        .stat-label { color: #666; margin-top: 5px; }
-
-        /* 单栏布局 - 地图在上方占据整个宽度 */
-        .map-section {
-            background: white; border-radius: 15px; padding: 30px;
-            box-shadow: 0 4px 20px rgba(0,0,0,0.1); margin-bottom: 30px;
-        }
-        .places-list {
-            background: white; border-radius: 15px; padding: 30px;
-            box-shadow: 0 4px 20px rgba(0,0,0,0.1); margin-bottom: 30px;
-        }
-
-        .map-section h2, .places-list h2 { color: #2c3e50; margin-bottom: 15px; }
-        .map-description {
-            color: #7f8c8d; font-size: 0.95rem; margin-bottom: 20px;
-            font-style: italic; text-align: center;
-        }
-        .map-note {
-            color: #95a5a6; font-size: 0.85rem; margin-top: 15px;
-            text-align: center; line-height: 1.4;
-        }
-
-        .map-container {
-            border-radius: 15px; overflow: hidden;
-            box-shadow: 0 4px 15px rgba(0,0,0,0.1);
-            background: #f8f9fa;
-        }
-        .map-image {
-            width: 100%; height: auto; display: block;
-            min-height: 500px; max-height: 800px; object-fit: contain;
-            border: 2px solid #e1e5e9; border-radius: 10px;
-        }
-        .map-placeholder {
-            background: linear-gradient(135deg, #f8f9ff 0%, #f0f2ff 100%);
-            border: 2px dashed #667eea; border-radius: 10px; padding: 60px;
-            text-align: center; color: #7f8c8d; min-height: 400px;
-            display: flex; flex-direction: column; justify-content: center; align-items: center;
-        }
-        .placeholder-icon { font-size: 4rem; margin-bottom: 20px; }
-
-        .place-item {
-            display: flex; align-items: center; padding: 20px 0; border-bottom: 1px solid #eee;
-        }
-        .place-item:last-child { border-bottom: none; }
-        .place-number {
-            background: #667eea; color: white; width: 35px; height: 35px;
-            border-radius: 50%; display: flex; align-items: center; justify-content: center;
-            font-weight: bold; margin-right: 20px; flex-shrink: 0; font-size: 1.1rem;
-        }
-        .place-info h3 { color: #2c3e50; margin-bottom: 8px; font-size: 1.2rem; }
-        .place-address { color: #7f8c8d; font-size: 1rem; line-height: 1.4; }
-        .footer {
-            text-align: center; margin-top: 40px; padding: 30px;
-            color: #666; font-size: 1rem;
-        }
-
-        /* 响应式设计 */
-        @media (max-width: 768px) {
-            .container { padding: 15px; }
-            .header { padding: 20px; }
-            .header h1 { font-size: 2rem; }
-            .map-section, .places-list { padding: 20px; }
-            .place-info h3 { font-size: 1.1rem; }
-        }
-
-        @media print {
-            body { background: white; }
-            .container { padding: 0; }
-            .map-image { max-height: none; }
-        }
-    </style>
-</head>
-<body>
-    <div class="container">
-        <div class="header">
-            <h1>🗺️ 我的旅游计划</h1>
-            <p>生成时间：${currentDate}</p>
-        </div>
-
-        <div class="stats">
-            <div class="stat-card">
-                <div class="stat-number">${this.travelList.length}</div>
-                <div class="stat-label">游玩地点</div>
-            </div>
-            <div class="stat-card">
-                <div class="stat-number">${cities.length}</div>
-                <div class="stat-label">涉及城市</div>
-            </div>
-            <div class="stat-card">
-                <div class="stat-number">${totalDistance.toFixed(1)}</div>
-                <div class="stat-label">总距离 (公里)</div>
-            </div>
-            <div class="stat-card">
-                <div class="stat-number">${totalTime.toFixed(1)}</div>
-                <div class="stat-label">预计时间 (小时)</div>
-            </div>
-        </div>
-
-        <!-- 地图区域 - 占据整个宽度 -->
-        ${mapSection}
-
-        <!-- 行程列表 - 独立区域 -->
-        <div class="places-list">
-            <h2>📝 详细行程</h2>
-            ${this.travelList.map((place, index) => `
-                <div class="place-item">
-                    <div class="place-number">${index + 1}</div>
-                    <div class="place-info">
-                        <h3>${place.name}</h3>
-                        <div class="place-address">${place.address}</div>
-                    </div>
-                </div>
-            `).join('')}
-        </div>
-
-        <div class="footer">
-            <p>✨ 使用旅游规划助手生成 | 祝您旅途愉快！</p>
-            <p>📅 ${currentDate} | 🌟 包含多彩路线标识，每段路线使用不同颜色便于区分</p>
-        </div>
-    </div>
-</body>
-</html>`;
+        return Security.buildShareHtml({
+            currentDate,
+            currentFilter: String(this.currentCityFilter ?? 'all'),
+            cityCount: this.getAllCities().length,
+            totalDistance: shareMetrics.totalDistanceKm,
+            totalTime: shareMetrics.totalTimeHours,
+            mapScreenshot,
+            places: usablePlaces.map(place => ({
+                name: String(place && place.name || ''),
+                address: String(place && place.address || '')
+            }))
+        });
     }
 
     // 专门用于截图的地图视野调整方法
     fitMapToPlacesForScreenshot(places) {
+        places = this.getUsablePlaces(places);
         if (!this.isMapLoaded || places.length === 0) return;
 
         if (places.length === 1) {
@@ -9219,14 +8764,18 @@ class TravelPlanner {
 
     // 生成列表变化的哈希值，用于检测是否需要重新计算距离
     generateTravelListHash() {
-        const activePlaces = this.travelList.filter(place => !place.isPending);
+        const activePlaces = this.getUsablePlaces();
         const placeData = activePlaces.map(place => ({
             id: place.id,
             lat: place.lat,
-            lng: place.lng,
-            isBlank: place.isBlank
+            lng: place.lng
         }));
-        return JSON.stringify(placeData);
+        return JSON.stringify({
+            provider: this.settings.selectedMapApi,
+            travelMode: this.routePlanOptions?.travelMode || 'DRIVING',
+            roundTrip: this.routePlanOptions?.roundTrip === true,
+            places: placeData
+        });
     }
 
     // 检查是否需要重新计算距离
@@ -9240,46 +8789,51 @@ class TravelPlanner {
     }
 
     // 生成距离缓存的键
-    generateDistanceCacheKey(fromPlace, toPlace) {
-        return `${fromPlace.lng},${fromPlace.lat}-${toPlace.lng},${toPlace.lat}`;
+    generateDistanceCacheKey(fromPlace, toPlace, provider = this.settings.selectedMapApi, mode = 'DRIVING') {
+        return PerformanceCore.createRouteResultCacheKey({
+            provider,
+            travelMode: mode,
+            origin: fromPlace,
+            destination: toPlace,
+            coordinatePrecision: PerformanceCore.ROUTE_COORDINATE_PRECISION,
+            algorithmVersion: PerformanceCore.ROUTE_ALGORITHM_VERSION
+        });
     }
 
     // 获取缓存的距离数据
-    getCachedDistance(fromPlace, toPlace) {
-        const key = this.generateDistanceCacheKey(fromPlace, toPlace);
+    getCachedDistance(fromPlace, toPlace, travelMode = 'DRIVING') {
+        const key = this.generateDistanceCacheKey(fromPlace, toPlace, this.settings.selectedMapApi, travelMode);
         const cached = this.distanceCache.get(key);
 
         if (cached && (Date.now() - cached.timestamp) < this.cacheTimeout) {
-            console.log(`📦 使用缓存的距离数据: ${key}`);
-            return cached;
+            return cached.value || cached;
         }
 
         return null;
     }
 
     // 缓存距离数据
-    cacheDistance(fromPlace, toPlace, distance, duration) {
-        const key = this.generateDistanceCacheKey(fromPlace, toPlace);
+    cacheDistance(fromPlace, toPlace, distanceMeters, durationSeconds, travelMode = 'DRIVING') {
+        const key = this.generateDistanceCacheKey(fromPlace, toPlace, this.settings.selectedMapApi, travelMode);
+        const existing = this.distanceCache.get(key)?.value || {};
         this.distanceCache.set(key, {
-            distance,
-            duration,
+            value: { ...existing, distanceMeters, durationSeconds },
             timestamp: Date.now()
         });
-        console.log(`💾 缓存距离数据: ${key}`);
     }
 
     // 生成搜索缓存的键
-    generateSearchCacheKey(keyword) {
-        return keyword.toLowerCase().trim();
+    generateSearchCacheKey(input) {
+        const context = typeof input === 'string' ? this.getSearchContext(input) : input;
+        return Search.createSearchCacheKey(context);
     }
 
     // 获取缓存的搜索结果
-    getCachedSearchResult(keyword) {
-        const key = this.generateSearchCacheKey(keyword);
+    getCachedSearchResult(input) {
+        const key = this.generateSearchCacheKey(input);
         const cached = this.searchCache.get(key);
 
         if (cached && (Date.now() - cached.timestamp) < this.cacheTimeout) {
-            console.log(`📦 使用缓存的搜索结果: ${keyword}`);
             return cached.results;
         }
 
@@ -9287,43 +8841,48 @@ class TravelPlanner {
     }
 
     // 缓存搜索结果
-    cacheSearchResult(keyword, results) {
-        const key = this.generateSearchCacheKey(keyword);
+    cacheSearchResult(input, results) {
+        const key = this.generateSearchCacheKey(input);
         this.searchCache.set(key, {
             results,
             timestamp: Date.now()
         });
-        console.log(`💾 缓存搜索结果: ${keyword} (${results.length}条)`);
     }
 
     // 生成路线缓存的键
-    generateRouteCacheKey(origin, destination) {
-        return `${origin.lng},${origin.lat}-${destination.lng},${destination.lat}`;
+    generateRouteCacheKey(origin, destination, provider = this.settings.selectedMapApi, mode = 'DRIVING') {
+        return this.generateDistanceCacheKey(origin, destination, provider, mode);
     }
 
     // 获取缓存的路线数据
-    getCachedRoute(origin, destination) {
-        const key = this.generateRouteCacheKey(origin, destination);
+    getCachedRoute(origin, destination, provider = this.settings.selectedMapApi, mode = 'DRIVING') {
+        const key = this.generateRouteCacheKey(origin, destination, provider, mode);
         const cached = this.routeCache.get(key);
 
         if (cached && (Date.now() - cached.timestamp) < this.cacheTimeout) {
-            console.log(`📦 使用缓存的路线数据: ${key}`);
-            return cached;
+            return cached.value || cached;
         }
 
         return null;
     }
 
     // 缓存路线数据
-    cacheRoute(origin, destination, coordinates, distance, duration) {
-        const key = this.generateRouteCacheKey(origin, destination);
+    cacheRoute(origin, destination, coordinates, distanceMeters, durationSeconds, provider = this.settings.selectedMapApi, mode = 'DRIVING') {
+        const key = this.generateRouteCacheKey(origin, destination, provider, mode);
         this.routeCache.set(key, {
-            coordinates,
-            distance,
-            duration,
+            value: {
+                provider,
+                travelMode: mode,
+                origin: { lat: origin.lat, lng: origin.lng },
+                destination: { lat: destination.lat, lng: destination.lng },
+                coordinates,
+                distanceMeters,
+                durationSeconds,
+                source: 'provider',
+                algorithmVersion: PerformanceCore.ROUTE_ALGORITHM_VERSION
+            },
             timestamp: Date.now()
         });
-        console.log(`💾 缓存路线数据: ${key}`);
     }
 
     // 清理过期缓存
@@ -9362,43 +8921,14 @@ class TravelPlanner {
 
     // 防抖距离计算
     calculateDistancesWithDebounce() {
-        // 清除之前的定时器
-        if (this.calculateDistancesTimeout) {
-            clearTimeout(this.calculateDistancesTimeout);
-        }
-
-        // 设置新的防抖定时器
-        this.calculateDistancesTimeout = setTimeout(() => {
-            this.calculateDistancesOptimized();
-        }, 300); // 300ms防抖
+        return this.scheduleRoutePipeline(120);
     }
 
     // 优化后的距离计算（带缓存和重复检查）
     calculateDistancesOptimized() {
-        // 检查是否正在计算距离
-        if (this.isCalculatingDistances) {
-            console.log('⚠️ 距离计算正在进行中，跳过重复调用');
-            return;
-        }
-
-        // 检查是否需要重新计算
-        if (!this.shouldRecalculateDistances()) {
-            console.log('📋 列表未变化，跳过距离重新计算');
-            return;
-        }
-
-        console.log('🔄 开始优化的距离计算...');
-        this.isCalculatingDistances = true;
-
-        try {
-            // 调用原有的计算逻辑
-            this.calculateDistances();
-        } finally {
-            // 确保在任何情况下都重置标志
-            setTimeout(() => {
-                this.isCalculatingDistances = false;
-            }, 1000);
-        }
+        const signature = this.generateRoutePipelineSignature();
+        if (signature === this.routeResultSignature) return Promise.resolve(this.routeResults);
+        return this.startRoutePipeline(this.beginRouteTokens(), signature);
     }
 }
 
@@ -9445,353 +8975,5 @@ document.addEventListener('DOMContentLoaded', () => {
 // 导出函数供HTML调用
 if (typeof window !== 'undefined') {
     window.initMap = initMap;
-
-    // 导出调试函数
-    window.testGaodeSearch = function (keyword = '北京大学') {
-        console.log('🧪 === 手动测试高德搜索 ===');
-        if (window.app && window.app.searchWithGaode) {
-            window.app.searchWithGaode(keyword);
-        } else {
-            console.error('❌ 应用未初始化或searchWithGaode方法不存在');
-        }
-    };
-
-    window.testGaodeAPI = async function () {
-        console.log('🧪 === 手动测试高德Web服务API ===');
-        if (window.app && window.app.testGaodeAPI) {
-            const result = await window.app.testGaodeAPI();
-            console.log('🧪 测试结果:', result ? '成功' : '失败');
-            return result;
-        } else {
-            console.error('❌ 应用未初始化或testGaodeAPI方法不存在');
-            return false;
-        }
-    };
-
-    window.checkAppStatus = function () {
-        console.log('🔍 === 应用状态检查 ===');
-        console.log('window.app:', !!window.app);
-        if (window.app) {
-            console.log('app.settings:', window.app.settings);
-            console.log('app.isMapLoaded:', window.app.isMapLoaded);
-            console.log('selectedMapApi:', window.app.settings?.selectedMapApi);
-            console.log('google API key状态:', window.app.getApiKey ? (window.app.getApiKey('google') ? '已配置' : '未配置') : 'getApiKey方法不存在');
-            console.log('gaode API key状态:', window.app.getApiKey ? (window.app.getApiKey('gaode') ? '已配置' : '未配置') : 'getApiKey方法不存在');
-            console.log('bing API key状态:', window.app.getApiKey ? (window.app.getApiKey('bing') ? '已配置' : '未配置') : 'getApiKey方法不存在');
-        }
-        console.log('🌍 浏览器fetch支持:', typeof fetch !== 'undefined');
-        console.log('🗺️ AMap对象存在:', typeof AMap !== 'undefined');
-        if (typeof AMap !== 'undefined') {
-            console.log('AMap版本:', AMap.version);
-        }
-    };
-
-    window.testRouteDrawing = function () {
-        console.log('🧪 === 测试路线绘制 ===');
-        if (window.app && window.app.showRoute) {
-            if (window.app.travelList && window.app.travelList.length >= 2) {
-                window.app.showRoute();
-                console.log('✅ 路线绘制命令已执行');
-            } else {
-                console.warn('⚠️ 需要至少2个地点才能绘制路线');
-                console.log('当前地点数量:', window.app.travelList ? window.app.travelList.length : 0);
-            }
-        } else {
-            console.error('❌ 应用未初始化或showRoute方法不存在');
-        }
-    };
-
-    window.testDistanceCalculation = function () {
-        console.log('🧪 === 测试距离计算 ===');
-        if (window.app && window.app.calculateDistances) {
-            if (window.app.travelList && window.app.travelList.length >= 2) {
-                window.app.calculateDistances();
-                console.log('✅ 距离计算命令已执行');
-            } else {
-                console.warn('⚠️ 需要至少2个地点才能计算距离');
-                console.log('当前地点数量:', window.app.travelList ? window.app.travelList.length : 0);
-            }
-        } else {
-            console.error('❌ 应用未初始化或calculateDistances方法不存在');
-        }
-    };
-
-    window.testMarkerCompatibility = function () {
-        console.log('🧪 === 测试Marker兼容性 ===');
-        if (window.app) {
-            try {
-                // 尝试应用城市过滤功能来测试marker兼容性
-                if (window.app.applyCityFilterWithoutFitting) {
-                    window.app.applyCityFilterWithoutFitting();
-                    console.log('✅ Marker兼容性测试通过');
-                    return true;
-                } else {
-                    console.warn('⚠️ applyCityFilterWithoutFitting方法不存在');
-                    return false;
-                }
-            } catch (error) {
-                console.error('❌ Marker兼容性测试失败:', error);
-                return false;
-            }
-        } else {
-            console.error('❌ 应用未初始化');
-            return false;
-        }
-    };
-
-    window.testMapUpdates = function () {
-        console.log('🧪 === 测试地图更新功能 ===');
-        if (window.app) {
-            try {
-                // 测试地图视野调整
-                if (window.app.travelList && window.app.travelList.length > 0) {
-                    console.log('🗺️ 测试地图视野调整...');
-                    const activePlaces = window.app.travelList.filter(place => !place.isPending && place.lat && place.lng);
-                    if (activePlaces.length > 0) {
-                        window.app.fitMapToPlaces(activePlaces);
-                        console.log('✅ 地图视野调整测试完成');
-                    } else {
-                        console.warn('⚠️ 没有有效地点进行测试');
-                    }
-                } else {
-                    console.warn('⚠️ 没有地点数据进行测试');
-                }
-
-                // 测试标记刷新
-                console.log('🔄 测试标记刷新...');
-                window.app.refreshAllMarkers();
-                console.log('✅ 标记刷新测试完成');
-
-                return true;
-            } catch (error) {
-                console.error('❌ 地图更新测试失败:', error);
-                return false;
-            }
-        } else {
-            console.error('❌ 应用未初始化');
-            return false;
-        }
-    };
-
-    window.testShowRoute = function () {
-        console.log('🧪 === 测试显示路线功能 ===');
-        if (window.app && window.app.showRoute) {
-            try {
-                window.app.showRoute();
-                console.log('✅ 显示路线测试完成');
-                return true;
-            } catch (error) {
-                console.error('❌ 显示路线测试失败:', error);
-                return false;
-            }
-        } else {
-            console.error('❌ 应用未初始化或showRoute方法不存在');
-            return false;
-        }
-    };
-
-    window.testPendingPlacesView = function () {
-        console.log('🧪 === 测试待定点视角调整功能 ===');
-        if (window.app) {
-            try {
-                const pendingCount = window.app.travelList.filter(place => place.isPending).length;
-                const activeCount = window.app.travelList.filter(place => !place.isPending && place.lat && place.lng).length;
-
-                console.log(`📊 当前状态: ${activeCount}个游玩点, ${pendingCount}个待定点`);
-
-                if (pendingCount === 0) {
-                    console.warn('⚠️ 没有待定点可供测试，建议先将一些地点设置为待定状态');
-                    return false;
-                }
-
-                console.log('👀 测试显示待定点并调整视角...');
-
-                // 首先确保待定点是隐藏的
-                if (window.app.showPendingPlaces) {
-                    window.app.togglePendingPlaces(); // 先隐藏
-                    setTimeout(() => {
-                        window.app.togglePendingPlaces(); // 再显示，触发视角调整
-                        console.log('✅ 待定点视角调整测试完成');
-                    }, 500);
-                } else {
-                    window.app.togglePendingPlaces(); // 直接显示，触发视角调整
-                    console.log('✅ 待定点视角调整测试完成');
-                }
-
-                return true;
-            } catch (error) {
-                console.error('❌ 待定点视角调整测试失败:', error);
-                return false;
-            }
-        } else {
-            console.error('❌ 应用未初始化');
-            return false;
-        }
-    };
-
-    window.testSatelliteToggle = function () {
-        console.log('🧪 === 测试卫星图切换功能 ===');
-        if (window.app && window.app.isMapLoaded) {
-            try {
-                const selectedMapApi = window.app.settings.selectedMapApi;
-                console.log(`📍 当前地图API: ${selectedMapApi}`);
-                console.log(`🗺️ 当前模式: ${window.app.isSatelliteMode ? '卫星图' : '普通图'}`);
-
-                console.log('🔄 测试切换到卫星图...');
-                if (!window.app.isSatelliteMode) {
-                    window.app.toggleSatellite();
-                }
-
-                setTimeout(() => {
-                    console.log('🔄 测试切换回普通图...');
-                    if (window.app.isSatelliteMode) {
-                        window.app.toggleSatellite();
-                    }
-                    console.log('✅ 卫星图切换测试完成');
-                }, 2000);
-
-                return true;
-            } catch (error) {
-                console.error('❌ 卫星图切换测试失败:', error);
-                return false;
-            }
-        } else {
-            console.error('❌ 地图未初始化或应用未加载');
-            return false;
-        }
-    };
-
-    window.testMarkerToggle = function () {
-        console.log('🧪 === 测试标记清除和恢复功能 ===');
-        if (window.app && window.app.isMapLoaded) {
-            try {
-                const activeCount = window.app.travelList.filter(place => !place.isPending && place.lat && place.lng && !place.isBlank).length;
-                const pendingCount = window.app.travelList.filter(place => place.isPending).length;
-
-                console.log(`📊 当前状态: ${activeCount}个游玩点, ${pendingCount}个待定点`);
-
-                if (activeCount === 0) {
-                    console.warn('⚠️ 没有游玩点可供测试，建议先添加一些地点');
-                    return false;
-                }
-
-                console.log('🗑️ 测试清除标记...');
-                if (!window.app.markersCleared) {
-                    window.app.toggleMarkers(); // 清除标记
-                }
-
-                setTimeout(() => {
-                    console.log('↩️ 测试恢复标记并调整视角...');
-                    if (window.app.markersCleared) {
-                        window.app.toggleMarkers(); // 恢复标记
-                    }
-                    console.log('✅ 标记切换测试完成');
-                    console.log(`📋 验证：恢复标记时地图视角应该调整为只显示${activeCount}个游玩点区域`);
-                }, 2000);
-
-                return true;
-            } catch (error) {
-                console.error('❌ 标记切换测试失败:', error);
-                return false;
-            }
-        } else {
-            console.error('❌ 地图未初始化或应用未加载');
-            return false;
-        }
-    };
-
-    window.testGaodeMarkers = function () {
-        console.log('🧪 === 测试高德地图标记功能 ===');
-        if (window.app && window.app.settings.selectedMapApi === 'gaode') {
-            try {
-                console.log('🔄 重新创建标记...');
-                window.app.recreateMarkers();
-
-                console.log('⏳ 测试待定点显示...');
-                if (window.app.travelList.some(place => place.isPending)) {
-                    window.app.showPendingPlaces = true;
-                    window.app.updateTogglePendingButton();
-                } else {
-                    console.warn('⚠️ 没有待定点可供测试');
-                }
-
-                console.log('🏷️ 测试标签切换...');
-                window.app.togglePlaceNames();
-                setTimeout(() => {
-                    window.app.togglePlaceNames();
-                }, 2000);
-
-                console.log('✅ 高德地图标记测试完成');
-                return true;
-            } catch (error) {
-                console.error('❌ 高德地图标记测试失败:', error);
-                return false;
-            }
-        } else {
-            console.warn('⚠️ 当前不是高德地图模式');
-            return false;
-        }
-    };
-
-    window.testGaodeCompatibility = function () {
-        console.log('🧪 === 测试高德地图完整兼容性 ===');
-        if (window.app) {
-            try {
-                const originalApi = window.app.settings.selectedMapApi;
-                console.log(`📋 当前地图API: ${originalApi}`);
-
-                if (originalApi !== 'gaode') {
-                    console.log('⚠️ 当前不是高德地图，建议在设置中切换到高德地图后测试');
-                }
-
-                // 测试标记创建
-                console.log('🎯 测试标记创建...');
-                window.app.recreateMarkers();
-
-                // 测试路线绘制
-                console.log('🛣️ 测试路线绘制...');
-                window.app.drawRoute();
-
-                // 测试地图视野调整
-                console.log('📐 测试地图视野调整...');
-                const activePlaces = window.app.travelList.filter(place => !place.isPending && place.lat && place.lng);
-                if (activePlaces.length > 0) {
-                    window.app.fitMapToPlaces(activePlaces);
-                }
-
-                // 测试标签功能
-                console.log('🏷️ 测试标签功能...');
-                setTimeout(() => {
-                    window.app.togglePlaceNames();
-                    setTimeout(() => {
-                        window.app.togglePlaceNames();
-                    }, 1000);
-                }, 500);
-
-                console.log('✅ 高德地图兼容性测试完成');
-                return true;
-            } catch (error) {
-                console.error('❌ 高德地图兼容性测试失败:', error);
-                return false;
-            }
-        } else {
-            console.error('❌ 应用未初始化');
-            return false;
-        }
-    };
-
-    console.log('🔧 调试函数已加载，您可以在控制台使用：');
-    console.log('  - testGaodeSearch("关键字") : 测试高德Web服务API搜索');
-    console.log('  - testGaodeAPI() : 测试高德Web服务API状态');
-    console.log('  - checkAppStatus() : 检查应用状态');
-    console.log('  - testRouteDrawing() : 测试路线绘制功能');
-    console.log('  - testDistanceCalculation() : 测试距离计算功能');
-    console.log('  - testMarkerCompatibility() : 测试Marker兼容性修复');
-    console.log('  - testMapUpdates() : 测试地图更新和视野调整功能');
-    console.log('  - testShowRoute() : 测试显示路线按钮功能');
-    console.log('  - testPendingPlacesView() : 测试待定点视角调整功能');
-    console.log('  - testSatelliteToggle() : 测试卫星图切换功能');
-    console.log('  - testMarkerToggle() : 测试标记清除和恢复功能');
-    console.log('  - testGaodeMarkers() : 测试高德地图标记功能');
-    console.log('  - testGaodeCompatibility() : 测试高德地图完整兼容性');
+    window.TravelPlanner = TravelPlanner;
 }

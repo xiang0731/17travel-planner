@@ -3,41 +3,17 @@
 
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport"
+        content="width=device-width, initial-scale=1.0, viewport-fit=cover, interactive-widget=resizes-content">
+    <meta http-equiv="Content-Security-Policy"
+        content="default-src 'self'; script-src 'self' https://*.googleapis.com https://*.gstatic.com https://*.ggpht.com https://*.googleusercontent.com https://*.amap.com https://*.tianditu.gov.cn; script-src-attr 'none'; style-src 'self' 'unsafe-inline' https://*.googleapis.com https://*.gstatic.com https://*.amap.com https://*.tianditu.gov.cn; img-src 'self' data: blob: https://*.googleapis.com https://*.gstatic.com https://*.google.com https://*.ggpht.com https://*.googleusercontent.com https://*.amap.com https://*.autonavi.com https://*.tianditu.gov.cn; connect-src 'self' https://*.googleapis.com https://*.gstatic.com https://*.google.com https://*.googleusercontent.com https://*.amap.com https://*.autonavi.com https://*.tianditu.gov.cn; font-src 'self' data: https://*.gstatic.com https://*.amap.com; frame-src https://*.google.com; worker-src 'self' blob:; child-src blob:; object-src 'none'; base-uri 'self'; form-action 'self'; upgrade-insecure-requests">
+    <meta name="referrer" content="strict-origin-when-cross-origin">
     <title>17旅游规划助手</title>
-    <link rel="stylesheet" href="styles.css?v=1.15.0">
-    <script>
-        // 尽早与当前地图服务建立 DNS/TLS 连接，不等待主脚本解析完成。
-        (() => {
-            try {
-                const saved = JSON.parse(localStorage.getItem('travelPlannerData') || '{}');
-                const provider = saved.settings?.selectedMapApi || 'gaode';
-                const providerOrigins = {
-                    gaode: ['https://webapi.amap.com'],
-                    tianditu: ['https://api.tianditu.gov.cn'],
-                    google: ['https://maps.googleapis.com', 'https://maps.gstatic.com']
-                };
-
-                (providerOrigins[provider] || []).forEach(origin => {
-                    const preconnect = document.createElement('link');
-                    preconnect.rel = 'preconnect';
-                    preconnect.href = origin;
-                    preconnect.crossOrigin = 'anonymous';
-                    document.head.appendChild(preconnect);
-
-                    const dnsPrefetch = document.createElement('link');
-                    dnsPrefetch.rel = 'dns-prefetch';
-                    dnsPrefetch.href = origin;
-                    document.head.appendChild(dnsPrefetch);
-                });
-            } catch (error) {
-                // 本地设置损坏不应影响页面继续启动。
-            }
-        })();
-    </script>
-    <!-- Google地图API -->
-    <!-- Google Maps API脚本将根据设置中的API密钥动态加载 -->
-    <!-- 请在应用设置中配置您的Google Maps API密钥 -->
+    <link rel="icon" type="image/png"
+        href="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=">
+    <link rel="stylesheet" href="assets/css/styles.css?v=3.2.5">
+    <script src="assets/js/preload.js?v=2.0.0"></script>
+    <!-- 地图 SDK 使用部署时注入的、仅限渲染 API 且绑定 Referrer 的公共 Key。 -->
 </head>
 
 <body>
@@ -48,26 +24,32 @@
                 <p id="header-version">探索世界，规划你的完美旅程</p>
             </div>
             <div class="header-right">
-                <button id="compactModeBtn" class="header-btn compact-mode-btn" title="紧凑模式" style="display: none;">📱
-                    紧凑</button>
-                <button id="saveSchemeBtn" class="header-btn" title="方案管理">📋 方案</button>
-                <button id="importBtn" class="header-btn" title="导入备份">📥 导入</button>
-                <button id="exportBtn" class="header-btn" title="导出功能">📤 导出</button>
-                <button id="settingsBtn" class="header-btn" title="设置">⚙️ 设置</button>
+                <button id="saveSchemeBtn" class="header-btn" type="button" title="方案管理" aria-haspopup="dialog"
+                    aria-controls="saveSchemeModal">📋 方案</button>
+                <button id="importBtn" class="header-btn" type="button" title="导入备份" aria-haspopup="dialog"
+                    aria-controls="importModal">📥 导入</button>
+                <button id="exportBtn" class="header-btn" type="button" title="导出功能" aria-haspopup="dialog"
+                    aria-controls="exportModal">📤 导出</button>
+                <button id="settingsBtn" class="header-btn" type="button" title="设置" aria-haspopup="dialog"
+                    aria-controls="settingsModal">⚙️ 设置</button>
             </div>
         </header>
 
+        <div id="systemMessages" class="system-messages" aria-live="polite" aria-atomic="true"></div>
+
         <div class="main-content">
             <!-- 左侧面板 -->
-            <div class="sidebar">
+            <div id="itineraryView" class="sidebar">
                 <!-- 搜索区域 -->
                 <div class="search-section">
                     <h3>🔍 搜索地点</h3>
                     <div class="search-box">
-                        <input type="text" id="searchInput" placeholder="输入地点名称..." />
-                        <button id="searchBtn">搜索</button>
+                        <input type="text" id="searchInput" placeholder="输入地点名称..." autocomplete="off" aria-controls="searchResults" />
+                        <button id="searchBtn" type="button" aria-controls="searchResults">搜索</button>
+                        <button id="resetSearchBtn" class="reset-search-btn" type="button" title="清空搜索内容和结果">重置</button>
                     </div>
-                    <div id="searchResults" class="search-results"></div>
+                    <div id="searchResults" class="search-results" aria-live="polite"
+                        aria-atomic="false"></div>
                 </div>
 
                 <!-- 游玩列表 -->
@@ -76,16 +58,19 @@
                     <div class="playlist-controls">
                         <button id="addBlankPlaceBtn" class="add-blank-btn">添加空白</button>
                         <button id="clearAllBtn" class="clear-btn">清空列表</button>
-                        <button id="optimizeRouteBtn" class="optimize-btn">优化路线</button>
+                        <button id="optimizeRouteBtn" class="optimize-btn">快速优化</button>
+                        <button id="undoOptimizeBtn" class="undo-optimize-btn" hidden>撤销优化</button>
                         <button id="showRouteBtn" class="show-route-btn">显示路线</button>
                     </div>
-                    <ul id="travelList" class="travel-list"></ul>
+                    <ul id="travelList" class="travel-list" aria-label="游玩地点，可使用上移和下移按钮排序"></ul>
+                    <div id="sortStatus" class="visually-hidden" role="status" aria-live="polite" aria-atomic="true"></div>
 
                     <!-- 总距离显示 -->
                     <div class="distance-summary">
                         <h4>📊 路线统计</h4>
                         <div id="totalDistance" class="total-distance">总距离: 0 公里</div>
                         <div id="estimatedTime" class="estimated-time">预计时间: 0 小时</div>
+                        <div id="distanceSource" class="distance-source">数据来源: 尚未计算</div>
                     </div>
 
                     <!-- 待定列表 -->
@@ -97,16 +82,20 @@
             </div>
 
             <!-- 右侧地图 -->
-            <div class="map-container">
+            <div id="mapView" class="map-container">
                 <div id="mapContainer" class="map"></div>
 
                 <!-- 地图控制按钮 -->
                 <div class="map-controls">
                     <button id="locateBtn" class="control-btn">📍 当前位置</button>
-                    <button id="clearMarkersBtn" class="control-btn">🗑️ 清除标记</button>
-                    <button id="satelliteBtn" class="control-btn">🛰️ 卫星图</button>
-                    <button id="toggleNamesBtn" class="control-btn">🏷️ 隐藏名称</button>
-                    <button id="togglePendingBtn" class="control-btn">⏳ 显示待定点</button>
+                    <button id="clearMarkersBtn" class="control-btn" type="button" aria-label="显示地图标记"
+                        aria-pressed="true">🗑️ 清除标记</button>
+                    <button id="satelliteBtn" class="control-btn" type="button" aria-label="卫星地图模式"
+                        aria-pressed="false">🛰️ 卫星图</button>
+                    <button id="toggleNamesBtn" class="control-btn" type="button" aria-label="显示地点名称"
+                        aria-pressed="true">🏷️ 隐藏名称</button>
+                    <button id="togglePendingBtn" class="control-btn" type="button" aria-label="显示待定地点"
+                        aria-pressed="false">⏳ 显示待定点</button>
                 </div>
 
 
@@ -118,21 +107,15 @@
             <div class="footer-content">
                 <div class="footer-section stats-section">
                     <div class="stats-counter">
-                        <!-- 卜算子统计 -->
-                        <span id="busuanzi_container_site_pv">
-                            👀 总访问量：<span id="busuanzi_value_site_pv">-</span> 次
-                        </span>
-                        <span id="busuanzi_container_site_uv">
-                            🧑‍🤝‍🧑 访客数：<span id="busuanzi_value_site_uv">-</span> 人
-                        </span>
+                        <span>🔒 地图 Web Service 由本站安全网关提供</span>
                     </div>
                 </div>
                 <div class="footer-section links-section">
-                    <a href="https://github.com/xiang0731/travel-planner/issues/new" target="_blank"
+                    <a href="https://github.com/xiang0731/travel-planner/issues/new" target="_blank" rel="noopener noreferrer"
                         class="footer-link">
                         💬 提问题/建议
                     </a>
-                    <a href="https://www.wow17.com/" target="_blank" class="footer-link">
+                    <a href="https://www.wow17.com/" target="_blank" rel="noopener noreferrer" class="footer-link">
                         🌟 了解更多→WOW17
                     </a>
                 </div>
@@ -141,15 +124,35 @@
 
     </div>
 
-    <!-- 移动端紧凑模式浮动切换按钮 -->
-    <button id="compactToggleFloating" class="compact-toggle-floating" style="display: none;" title="退出紧凑模式">
-        🔙 退出紧凑
-    </button>
+    <nav id="mobilePrimaryNav" class="mobile-primary-nav" aria-label="移动端主导航">
+        <button class="mobile-nav-item is-active" type="button" data-mobile-view="itinerary"
+            aria-controls="itineraryView" aria-current="page">
+            <span aria-hidden="true">📝</span>
+            <span>行程</span>
+        </button>
+        <button class="mobile-nav-item" type="button" data-mobile-view="map" aria-controls="mapView">
+            <span aria-hidden="true">🗺️</span>
+            <span>地图</span>
+        </button>
+        <button class="mobile-nav-item" id="mobileSchemesBtn" type="button" aria-controls="saveSchemeModal"
+            aria-haspopup="dialog">
+            <span aria-hidden="true">📋</span>
+            <span>方案</span>
+        </button>
+        <button class="mobile-nav-item" id="mobileSettingsBtn" type="button" aria-controls="settingsModal"
+            aria-haspopup="dialog">
+            <span aria-hidden="true">⚙️</span>
+            <span>设置</span>
+        </button>
+    </nav>
+
+    <div id="saveStatus" class="visually-hidden" role="status" aria-live="polite" aria-atomic="true"
+        data-live-region></div>
 
     <!-- 模态框 -->
-    <div id="placeModal" class="modal">
+    <div id="placeModal" class="modal" role="dialog" aria-modal="true" aria-labelledby="modalTitle" hidden>
         <div class="modal-content">
-            <span class="close">&times;</span>
+            <button class="close" type="button" aria-label="关闭地点详情">&times;</button>
             <h3 id="modalTitle">地点详情</h3>
             <div id="modalContent">
                 <p id="placeName"></p>
@@ -160,18 +163,22 @@
     </div>
 
     <!-- 储存方案模态框 -->
-    <div id="saveSchemeModal" class="modal">
+    <div id="saveSchemeModal" class="modal" role="dialog" aria-modal="true" aria-labelledby="saveSchemeTitle" hidden>
         <div class="modal-content unified-modal-content">
-            <span class="close">&times;</span>
-            <h3>📋 方案管理</h3>
+            <button class="close" type="button" aria-label="关闭方案管理">&times;</button>
+            <h3 id="saveSchemeTitle">📋 方案管理</h3>
             <div class="save-scheme-content">
                 <div class="save-new-scheme">
-                    <h4>保存为新方案</h4>
-                    <input type="text" id="schemeNameInput" placeholder="输入方案名称..." maxlength="50">
-                    <div id="schemeNameWarning" class="scheme-name-warning" style="display: none;">
+                    <label class="visually-hidden" for="schemeNameInput">新方案名称</label>
+                    <input type="text" id="schemeNameInput" placeholder="输入方案名称..." maxlength="50"
+                        aria-describedby="schemeNameWarning">
+                    <div id="schemeNameWarning" class="scheme-name-warning" role="alert" hidden>
                         ⚠️ 已存在同名方案，请更换名字
                     </div>
-                    <button id="saveNewSchemeBtn" class="save-btn">保存方案</button>
+                    <div class="save-scheme-actions">
+                        <button id="saveNewSchemeBtn" class="save-btn">保存为新方案</button>
+                        <button id="newBlankSchemeBtn" class="save-btn" type="button">新建空白方案</button>
+                    </div>
                 </div>
                 <div class="saved-schemes">
                     <h4>已保存的方案（当前方案会自动保存）</h4>
@@ -182,17 +189,18 @@
     </div>
 
     <!-- 导入模态框 -->
-    <div id="importModal" class="modal">
+    <div id="importModal" class="modal" role="dialog" aria-modal="true" aria-labelledby="importTitle" hidden>
         <div class="modal-content unified-modal-content">
-            <span class="close">&times;</span>
-            <h3>📥 导入数据</h3>
+            <button class="close" type="button" aria-label="关闭导入数据">&times;</button>
+            <h3 id="importTitle">📥 导入数据</h3>
             <div class="import-content">
                 <div class="import-area">
                     <div class="file-drop-zone" id="fileDropZone">
                         <div class="drop-icon">📁</div>
                         <h4>选择备份文件</h4>
                         <p>拖拽JSON备份文件到此处，或点击选择文件</p>
-                        <input type="file" id="fileInput" accept=".json" style="display: none;">
+                        <input type="file" id="fileInput" class="visually-hidden" accept=".json" tabindex="-1"
+                            aria-label="JSON 备份文件">
                         <button id="selectFileBtn" class="import-btn">选择文件</button>
                     </div>
                 </div>
@@ -210,10 +218,10 @@
     </div>
 
     <!-- 导出选择模态框 -->
-    <div id="exportModal" class="modal">
+    <div id="exportModal" class="modal" role="dialog" aria-modal="true" aria-labelledby="exportTitle" hidden>
         <div class="modal-content unified-modal-content">
-            <span class="close">&times;</span>
-            <h3>📤 导出选择</h3>
+            <button class="close" type="button" aria-label="关闭导出选择">&times;</button>
+            <h3 id="exportTitle">📤 导出选择</h3>
             <div class="export-options">
                 <div class="export-option">
                     <div class="export-card" id="exportShareCard">
@@ -236,45 +244,48 @@
     </div>
 
     <!-- 设置模态框 -->
-    <div id="settingsModal" class="modal">
+    <div id="settingsModal" class="modal" role="dialog" aria-modal="true" aria-labelledby="settingsTitle" hidden>
         <div class="modal-content settings-modal-content">
-            <span class="close">&times;</span>
-            <h3>⚙️ 应用设置</h3>
+            <button class="close" type="button" aria-label="关闭应用设置">&times;</button>
+            <h3 id="settingsTitle">⚙️ 应用设置</h3>
             <div class="settings-container">
                 <!-- 左侧菜单 -->
                 <div class="settings-sidebar">
-                    <div class="settings-menu">
-                        <div class="settings-menu-item active" data-panel="api">
-                            <div class="menu-icon">🔑</div>
-                            <span class="menu-text">API配置</span>
-                        </div>
-                        <div class="settings-menu-item" data-panel="navigation">
-                            <div class="menu-icon">🧭</div>
+                    <div class="settings-menu" role="tablist" aria-label="设置分类" aria-orientation="vertical">
+                        <button id="apiTab" class="settings-menu-item active" type="button" role="tab"
+                            aria-selected="true" aria-controls="apiPanel" tabindex="0" data-panel="api">
+                            <span class="menu-icon" aria-hidden="true">🔑</span>
+                            <span class="menu-text">地图服务</span>
+                        </button>
+                        <button id="navigationTab" class="settings-menu-item" type="button" role="tab"
+                            aria-selected="false" aria-controls="navigationPanel" tabindex="-1" data-panel="navigation">
+                            <span class="menu-icon" aria-hidden="true">🧭</span>
                             <span class="menu-text">导航设置</span>
-                        </div>
-                        <div class="settings-menu-item" data-panel="version">
-                            <div class="menu-icon">📋</div>
+                        </button>
+                        <button id="versionTab" class="settings-menu-item" type="button" role="tab"
+                            aria-selected="false" aria-controls="versionPanel" tabindex="-1" data-panel="version">
+                            <span class="menu-icon" aria-hidden="true">📋</span>
                             <span class="menu-text">版本详情</span>
-                        </div>
+                        </button>
                     </div>
                 </div>
 
                 <!-- 右侧内容面板 -->
                 <div class="settings-content">
                     <!-- API设置面板 -->
-                    <div class="settings-panel active" id="apiPanel">
+                    <div class="settings-panel active" id="apiPanel" role="tabpanel" aria-labelledby="apiTab">
                         <div class="panel-header">
-                            <h4>🔑 API密钥配置</h4>
-                            <p class="panel-description">配置地图服务的API密钥以启用完整功能</p>
+                            <h4>🛡️ 地图服务安全配置</h4>
+                            <p class="panel-description">地点搜索、路线、矩阵和静态地图统一由本站 PHP BFF 提供</p>
                         </div>
                         <div class="panel-content">
                             <!-- 地图API选择器 -->
                             <div class="map-api-selector">
                                 <h5>🗺️ 地图显示API选择</h5>
-                                <p class="selector-description">选择用于地图显示的API（即使配置了多个API密钥，也只会使用选择的API）</p>
+                                <p class="selector-description">选择地图渲染 SDK；搜索、路线、矩阵和静态图始终通过本站 BFF</p>
                                 <div class="api-choice-group">
                                     <label class="api-choice-option">
-                                        <input type="radio" name="selectedMapApi" value="gaode" checked>
+                                        <input class="visually-hidden-control" type="radio" name="selectedMapApi" value="gaode" checked>
                                         <div class="choice-card">
                                             <div class="choice-icon">🗺️</div>
                                             <div class="choice-info">
@@ -284,7 +295,7 @@
                                         </div>
                                     </label>
                                     <label class="api-choice-option">
-                                        <input type="radio" name="selectedMapApi" value="google">
+                                        <input class="visually-hidden-control" type="radio" name="selectedMapApi" value="google">
                                         <div class="choice-card">
                                             <div class="choice-icon">🌍</div>
                                             <div class="choice-info">
@@ -294,17 +305,17 @@
                                         </div>
                                     </label>
                                     <label class="api-choice-option">
-                                        <input type="radio" name="selectedMapApi" value="bing">
+                                        <input class="visually-hidden-control" type="radio" name="selectedMapApi" value="azure">
                                         <div class="choice-card">
                                             <div class="choice-icon">🌐</div>
                                             <div class="choice-info">
-                                                <h6>Bing Maps</h6>
-                                                <p>微软地图服务</p>
+                                                <h6>Azure Maps</h6>
+                                                <p>预留适配器</p>
                                             </div>
                                         </div>
                                     </label>
                                     <label class="api-choice-option">
-                                        <input type="radio" name="selectedMapApi" value="tianditu">
+                                        <input class="visually-hidden-control" type="radio" name="selectedMapApi" value="tianditu">
                                         <div class="choice-card">
                                             <div class="choice-icon">🇨🇳</div>
                                             <div class="choice-info">
@@ -317,54 +328,35 @@
                             </div>
 
                             <div class="api-keys-config">
-                                <div class="api-key-group">
-                                    <label for="gaodeApiKeyInput">高德地图API密钥</label>
-                                    <input type="password" id="gaodeApiKeyInput" placeholder="输入高德地图API Key..."
-                                        maxlength="200">
-                                    <small class="api-hint">
-                                        用于中国大陆地区的地图服务和导航功能
-                                        <br>
-                                        获取方式：访问 <a href="https://console.amap.com/" target="_blank">高德开放平台</a> 申请API密钥
-                                    </small>
-                                </div>
-                                <div class="api-key-group">
-                                    <label for="googleApiKeyInput">Google Maps API密钥</label>
-                                    <input type="password" id="googleApiKeyInput" placeholder="输入Google Maps API Key..."
-                                        maxlength="200">
-                                    <small class="api-hint">
-                                        用于地图显示、地点搜索、路线规划等功能
-                                        <br>
-                                        获取方式：访问 <a href="https://console.cloud.google.com/" target="_blank">Google Cloud
-                                            Console</a> 创建API密钥
-                                    </small>
-                                </div>
-                                <div class="api-key-group">
-                                    <label for="bingApiKeyInput">Bing Maps API密钥</label>
-                                    <input type="password" id="bingApiKeyInput" placeholder="输入Bing Maps API Key..."
-                                        maxlength="200">
-                                    <small class="api-hint">
-                                        用于微软Bing地图服务（可选）
-                                        <br>
-                                        获取方式：访问 <a href="https://www.bingmapsportal.com/" target="_blank">Bing Maps Dev
-                                            Center</a> 申请密钥
-                                    </small>
-                                </div>
-                                <div class="api-key-group">
-                                    <label for="tiandituApiKeyInput">天地图API密钥</label>
-                                    <input type="password" id="tiandituApiKeyInput" placeholder="输入天地图API Key (tk)..."
-                                        maxlength="200">
-                                    <small class="api-hint">
-                                        国家地理信息公共服务平台
-                                        <br>
-                                        获取方式：访问 <a href="https://console.tianditu.gov.cn/api/key" target="_blank">天地图开发者控制台</a> 申请密钥
-                                    </small>
-                                </div>
                                 <div class="api-security-note">
                                     <div class="security-icon">🔒</div>
                                     <div class="security-text">
-                                        <strong>安全说明：</strong>API密钥仅存储在您的浏览器本地，不会上传到任何服务器。请妥善保管您的API密钥，避免在公共场所输入。
+                                        <strong>生产模式：</strong>浏览器仅加载受 HTTP Referrer 与 API 范围限制的地图渲染 SDK 公共 Key；Web Service Key 只存在于服务端 Secret Manager，绝不进入方案、备份或日志。
                                     </div>
                                 </div>
+                                <details class="advanced-byok">
+                                    <summary>高级模式：个人部署 BYOK</summary>
+                                    <p class="api-hint">仅允许覆盖地图 JavaScript SDK 公共 Key。Key 只保存在当前标签页会话，默认关闭且永不导出。服务端 Web Service Key 仍必须通过 PHP BFF 环境变量配置。</p>
+                                    <label class="preference-item">
+                                        <input class="visually-hidden-control" type="checkbox" id="advancedByokEnabled">
+                                        <span class="checkmark"></span>
+                                        <span class="preference-text">我理解公共 Key 会出现在浏览器网络中，启用高级 BYOK</span>
+                                    </label>
+                                    <div id="advancedByokFields" hidden>
+                                        <div class="api-key-group">
+                                            <label for="gaodeSdkPublicKeyInput">高德 JavaScript SDK 公共 Key</label>
+                                            <input type="password" id="gaodeSdkPublicKeyInput" autocomplete="off" maxlength="200">
+                                        </div>
+                                        <div class="api-key-group">
+                                            <label for="googleSdkPublicKeyInput">Google Maps JavaScript API 公共 Key</label>
+                                            <input type="password" id="googleSdkPublicKeyInput" autocomplete="off" maxlength="200">
+                                        </div>
+                                        <div class="api-key-group">
+                                            <label for="tiandituSdkPublicKeyInput">天地图 JavaScript SDK 公共 Key</label>
+                                            <input type="password" id="tiandituSdkPublicKeyInput" autocomplete="off" maxlength="200">
+                                        </div>
+                                    </div>
+                                </details>
                             </div>
 
 
@@ -372,7 +364,7 @@
                     </div>
 
                     <!-- 导航设置面板 -->
-                    <div class="settings-panel" id="navigationPanel">
+                    <div class="settings-panel" id="navigationPanel" role="tabpanel" aria-labelledby="navigationTab" hidden>
                         <div class="panel-header">
                             <h4>🧭 导航应用设置</h4>
                             <p class="panel-description">选择点击"导航"按钮时使用的地图应用</p>
@@ -380,7 +372,7 @@
                         <div class="panel-content">
                             <div class="setting-options">
                                 <label class="setting-option">
-                                    <input type="radio" name="navigationApp" value="amap" checked>
+                                    <input class="visually-hidden-control" type="radio" name="navigationApp" value="amap" checked>
                                     <div class="option-card">
                                         <div class="option-icon">🗺️</div>
                                         <div class="option-info">
@@ -390,7 +382,7 @@
                                     </div>
                                 </label>
                                 <label class="setting-option">
-                                    <input type="radio" name="navigationApp" value="google">
+                                    <input class="visually-hidden-control" type="radio" name="navigationApp" value="google">
                                     <div class="option-card">
                                         <div class="option-icon">🌍</div>
                                         <div class="option-info">
@@ -400,7 +392,7 @@
                                     </div>
                                 </label>
                                 <label class="setting-option">
-                                    <input type="radio" name="navigationApp" value="bing">
+                                    <input class="visually-hidden-control" type="radio" name="navigationApp" value="bing">
                                     <div class="option-card">
                                         <div class="option-icon">🌐</div>
                                         <div class="option-info">
@@ -410,7 +402,7 @@
                                     </div>
                                 </label>
                                 <label class="setting-option">
-                                    <input type="radio" name="navigationApp" value="tianditu">
+                                    <input class="visually-hidden-control" type="radio" name="navigationApp" value="tianditu">
                                     <div class="option-card">
                                         <div class="option-icon">🇨🇳</div>
                                         <div class="option-info">
@@ -425,12 +417,12 @@
                                 <h5>🎯 导航偏好设置</h5>
                                 <div class="preference-group">
                                     <label class="preference-item">
-                                        <input type="checkbox" id="openInNewTab">
+                                        <input class="visually-hidden-control" type="checkbox" id="openInNewTab">
                                         <span class="checkmark"></span>
                                         <span class="preference-text">在新标签页中打开导航</span>
                                     </label>
                                     <label class="preference-item">
-                                        <input type="checkbox" id="showNavigationHint">
+                                        <input class="visually-hidden-control" type="checkbox" id="showNavigationHint">
                                         <span class="checkmark"></span>
                                         <span class="preference-text">显示导航操作提示</span>
                                     </label>
@@ -441,12 +433,12 @@
                                 <h5>🔘 按钮显示设置</h5>
                                 <div class="preference-group">
                                     <label class="preference-item">
-                                        <input type="checkbox" id="showShowInMapButton">
+                                        <input class="visually-hidden-control" type="checkbox" id="showShowInMapButton">
                                         <span class="checkmark"></span>
                                         <span class="preference-text">显示"在导航中显示"按钮</span>
                                     </label>
                                     <label class="preference-item">
-                                        <input type="checkbox" id="showNavigateToButton">
+                                        <input class="visually-hidden-control" type="checkbox" id="showNavigateToButton">
                                         <span class="checkmark"></span>
                                         <span class="preference-text">显示"导航至此处"按钮</span>
                                     </label>
@@ -456,7 +448,7 @@
                     </div>
 
                     <!-- 版本详情面板 -->
-                    <div class="settings-panel" id="versionPanel">
+                    <div class="settings-panel" id="versionPanel" role="tabpanel" aria-labelledby="versionTab" hidden>
                         <div class="panel-header">
                             <h4>📋 版本更新记录</h4>
                             <p class="panel-description">查看应用的版本更新历史和功能变更</p>
@@ -487,10 +479,10 @@
     </div>
 
     <!-- 编辑游玩点模态框 -->
-    <div id="editPlaceModal" class="modal">
+    <div id="editPlaceModal" class="modal" role="dialog" aria-modal="true" aria-labelledby="editPlaceTitle" hidden>
         <div class="modal-content">
-            <span class="close">&times;</span>
-            <h3>✏️ 编辑游玩点</h3>
+            <button class="close" type="button" aria-label="关闭编辑游玩点">&times;</button>
+            <h3 id="editPlaceTitle">✏️ 编辑游玩点</h3>
             <div class="edit-place-content">
                 <div class="edit-section">
                     <div class="original-info">
@@ -532,10 +524,104 @@
     </div>
 
     <!-- 冲突解决模态框 -->
-    <div id="conflictResolutionModal" class="modal">
+    <div id="routeOptimizationModal" class="modal" role="dialog" aria-modal="true" aria-labelledby="routeOptimizationTitle" hidden>
+        <div class="modal-content optimization-modal-content">
+            <button class="close optimization-close" type="button" aria-label="关闭路线优化">&times;</button>
+            <div class="optimization-heading">
+                <div>
+                    <span class="optimization-eyebrow">路线校对台</span>
+                    <h3 id="routeOptimizationTitle">快速优化</h3>
+                    <p>先比较，再决定是否改动当前行程。空白点和待定点不会参与计算。</p>
+                </div>
+                <span id="optimizationMethodBadge" class="optimization-method-badge">建议路线</span>
+            </div>
+
+            <div id="optimizationSetup" class="optimization-setup">
+                <div class="optimization-fields">
+                    <label class="optimization-field" for="optimizationStart">
+                        <span>固定起点</span>
+                        <select id="optimizationStart"></select>
+                    </label>
+                    <label class="optimization-field" for="optimizationEnd">
+                        <span>固定终点（可选）</span>
+                        <select id="optimizationEnd"></select>
+                    </label>
+                    <label class="optimization-field" for="optimizationTravelMode">
+                        <span>交通方式</span>
+                        <select id="optimizationTravelMode">
+                            <option value="DRIVING">驾车</option>
+                            <option value="WALKING">步行</option>
+                            <option value="BICYCLING">骑行</option>
+                            <option value="TRANSIT">公共交通</option>
+                        </select>
+                    </label>
+                    <label class="optimization-toggle" for="optimizationRoundTrip">
+                        <input id="optimizationRoundTrip" type="checkbox">
+                        <span>返回起点（往返）</span>
+                    </label>
+                </div>
+
+                <fieldset class="locked-place-fieldset">
+                    <legend>锁定相对顺序</legend>
+                    <p>被锁定的地点仍可移动，但彼此的先后次序不会改变。</p>
+                    <div id="optimizationLockedPlaces" class="locked-place-list"></div>
+                </fieldset>
+
+                <div id="optimizationStatus" class="optimization-status" aria-live="polite"></div>
+                <div class="optimization-actions">
+                    <button id="calculateSuggestionBtn" class="primary-btn" type="button">生成建议路线</button>
+                    <button id="cancelOptimizationBtn" class="secondary-btn" type="button">取消</button>
+                </div>
+            </div>
+
+            <div id="optimizationComparison" class="optimization-comparison" hidden>
+                <div class="comparison-source-row">
+                    <span id="optimizationSourceBadge" class="source-badge"></span>
+                    <span id="optimizationBudgetNote" class="budget-note"></span>
+                </div>
+
+                <div class="comparison-board">
+                    <article class="route-option route-option-original">
+                        <span class="route-option-label">当前方案</span>
+                        <strong id="originalDistance">—</strong>
+                        <span id="originalDuration">—</span>
+                    </article>
+                    <div class="savings-marker" aria-label="节省比例">
+                        <span id="optimizationSavingsLabel">预计节省</span>
+                        <strong id="optimizationSavings">—</strong>
+                        <small id="optimizationDistanceSavings">—</small>
+                    </div>
+                    <article class="route-option route-option-suggestion">
+                        <span class="route-option-label">建议路线</span>
+                        <strong id="suggestedDistance">—</strong>
+                        <span id="suggestedDuration">—</span>
+                    </article>
+                </div>
+
+                <div class="order-difference-panel">
+                    <div class="order-difference-header">
+                        <h4>顺序差异</h4>
+                        <span id="changedPlaceCount"></span>
+                    </div>
+                    <ol id="optimizationOrderDiff" class="order-difference-list"></ol>
+                </div>
+
+                <p id="optimizationCaveat" class="optimization-caveat"></p>
+                <div class="optimization-actions">
+                    <button id="applySuggestionBtn" class="primary-btn" type="button">应用建议路线</button>
+                    <button id="reconfigureOptimizationBtn" class="secondary-btn" type="button">调整条件</button>
+                    <button id="dismissSuggestionBtn" class="text-btn" type="button">保留当前方案</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 冲突解决模态框 -->
+    <div id="conflictResolutionModal" class="modal" role="dialog" aria-modal="true"
+        aria-labelledby="conflictResolutionTitle" hidden>
         <div class="modal-content large-modal">
-            <span class="close">&times;</span>
-            <h3>🔄 方案冲突解决</h3>
+            <button class="close" type="button" aria-label="关闭方案冲突解决">&times;</button>
+            <h3 id="conflictResolutionTitle">🔄 方案冲突解决</h3>
             <div class="conflict-resolution-content">
                 <div class="conflict-header">
                     <p>检测到以下方案冲突，请选择处理方式：</p>
@@ -551,10 +637,15 @@
         </div>
     </div>
 
-    <script src="script.js?v=1.15.0"></script>
+    <script src="assets/js/public-config.js?v=2.0.0"></script>
+    <script src="assets/js/security.js?v=2.0.0"></script>
+    <script src="assets/js/client-security.js?v=2.0.0"></script>
+    <script src="assets/js/planner-data.js?v=2.1.0"></script>
+    <script src="assets/js/search-controller.js?v=2.2.0"></script>
+    <script src="assets/js/route-optimizer.js?v=3.0.0"></script>
+    <script src="assets/js/performance-pipeline.js?v=1.0.0"></script>
+    <script src="assets/js/script.js?v=3.2.1"></script>
 
-    <!-- 卜算子统计脚本 -->
-    <script async src="//busuanzi.ibruce.info/busuanzi/2.3/busuanzi.pure.mini.js"></script>
 </body>
 
 </html>

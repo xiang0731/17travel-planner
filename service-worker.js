@@ -1,11 +1,31 @@
 const CACHE_PREFIX = 'travel-planner-shell-';
-const CACHE_NAME = `${CACHE_PREFIX}v1.15.0`;
-const APP_SHELL = [
+const CACHE_NAME = `${CACHE_PREFIX}v3.3.7`;
+const APP_SHELL = Object.freeze([
     './',
     './index.html',
-    './styles.css?v=1.15.0',
-    './script.js?v=1.15.0'
-];
+    './assets/css/styles.css?v=3.2.5',
+    './assets/js/preload.js?v=2.0.0',
+    './assets/js/security.js?v=2.0.0',
+    './assets/js/client-security.js?v=2.0.0',
+    './assets/js/planner-data.js?v=2.1.0',
+    './assets/js/search-controller.js?v=2.2.0',
+    './assets/js/route-optimizer.js?v=3.0.0',
+    './assets/js/performance-pipeline.js?v=1.0.0',
+    './assets/js/script.js?v=3.2.1'
+]);
+const CACHEABLE_PATHS = new Set([
+    '/',
+    '/index.html',
+    '/assets/css/styles.css',
+    '/assets/js/preload.js',
+    '/assets/js/security.js',
+    '/assets/js/client-security.js',
+    '/assets/js/planner-data.js',
+    '/assets/js/search-controller.js',
+    '/assets/js/route-optimizer.js',
+    '/assets/js/performance-pipeline.js',
+    '/assets/js/script.js'
+]);
 
 self.addEventListener('install', event => {
     event.waitUntil(
@@ -29,15 +49,16 @@ self.addEventListener('activate', event => {
 
 self.addEventListener('fetch', event => {
     const request = event.request;
-    if (request.method !== 'GET') return;
-
     const url = new URL(request.url);
-    if (url.origin !== self.location.origin) return;
+    if (request.method !== 'GET' || url.origin !== self.location.origin) return;
+
+    // Authentication, public deployment config and every BFF response are network-only.
+    if (url.pathname.startsWith('/api/') || url.pathname === '/assets/js/public-config.js') return;
 
     if (request.mode === 'navigate') {
         event.respondWith((async () => {
             try {
-                const response = await fetch(request);
+                const response = await fetch(request, { cache: 'no-store' });
                 if (response.ok) {
                     const cache = await caches.open(CACHE_NAME);
                     await cache.put('./index.html', response.clone());
@@ -50,29 +71,14 @@ self.addEventListener('fetch', event => {
         return;
     }
 
-    if (request.destination !== 'script' && request.destination !== 'style') return;
-
+    if (!CACHEABLE_PATHS.has(url.pathname)) return;
     event.respondWith((async () => {
         const cached = await caches.match(request);
-        if (cached) {
-            event.waitUntil(
-                fetch(request)
-                    .then(async response => {
-                        if (response.ok) {
-                            const cache = await caches.open(CACHE_NAME);
-                            await cache.put(request, response.clone());
-                        }
-                    })
-                    .catch(() => undefined)
-            );
-            return cached;
-        }
-
+        if (cached) return cached;
         const response = await fetch(request);
-        if (response.ok) {
-            const cache = await caches.open(CACHE_NAME);
-            await cache.put(request, response.clone());
-        }
+        if (!response.ok) return response;
+        const cache = await caches.open(CACHE_NAME);
+        await cache.put(request, response.clone());
         return response;
     })());
 });
